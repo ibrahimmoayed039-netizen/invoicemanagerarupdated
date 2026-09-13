@@ -21,12 +21,20 @@
     "files": [
       "main.js",
       "preload.js",
+      "db.js",
       "src/**/*",
       "assets/**/*"
     ],
     "win": {
       "target": "nsis",
       "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     },
     "mac": {
       "target": "dmg",
