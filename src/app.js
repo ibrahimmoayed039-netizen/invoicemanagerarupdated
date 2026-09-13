@@ -32,6 +32,43 @@ function el(tag, attrs, children) {
 function esc(s) {
   return String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
+// ---------------- حقول المبالغ بفواصل الآلاف ----------------
+function parseMoneyStr(s) {
+  return Number(String(s === undefined || s === null ? '' : s).replace(/,/g, '')) || 0;
+}
+function numVal(input) {
+  return parseMoneyStr(input && input.value);
+}
+function formatMoneyInputStr(raw) {
+  let s = String(raw === undefined || raw === null ? '' : raw).replace(/[^\d.]/g, '');
+  const firstDot = s.indexOf('.');
+  if (firstDot !== -1) s = s.slice(0, firstDot + 1) + s.slice(firstDot + 1).replace(/\./g, '');
+  const parts = s.split('.');
+  let intPart = parts[0].replace(/^0+(?=\d)/, '');
+  const decPart = parts.length > 1 ? '.' + parts[1].slice(0, 2) : '';
+  intPart = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return intPart + decPart;
+}
+function moneyInput(attrs) {
+  const a = Object.assign({}, attrs || {});
+  const initial = a.value;
+  delete a.value;
+  a.type = 'text';
+  a.inputmode = 'decimal';
+  const input = el('input', a);
+  input.value = formatMoneyInputStr(initial);
+  input.addEventListener('input', () => {
+    const fromEnd = input.value.length - (input.selectionStart || 0);
+    input.value = formatMoneyInputStr(input.value);
+    const pos = Math.max(0, input.value.length - fromEnd);
+    input.setSelectionRange(pos, pos);
+  });
+  return input;
+}
+function moneyField(name, label, value) {
+  const input = moneyInput({ class: 'input', 'data-field': name, value: value || 0 });
+  return el('div', { class: 'field' }, [el('label', {}, [label]), input]);
+}
 function currencyDecimals(cur) {
   // الدينار العراقي عملياً بلا كسور (لا تُستخدم الفلوس في التعاملات اليومية)
   return cur === 'د.ع' ? 0 : 2;
@@ -134,7 +171,7 @@ async function renderDashboard(area) {
   const tbody = el('tbody');
   recent.forEach((h) => {
     tbody.appendChild(el('tr', {}, [
-      el('td', {}, [formatDate(h.date)]),
+      el('td', {}, [formatDate(h.date, true)]),
       el('td', {}, [customerName(h.customerId)]),
       el('td', {}, [h.label]),
       el('td', { class: 'num' }, [formatMoney(h.amount)]),
@@ -238,7 +275,7 @@ function openCustomerForm(existing) {
   const body = el('div', { class: 'form-grid' }, [
     field('name', 'الاسم *', existing && existing.name),
     field('phone', 'رقم الهاتف', existing && existing.phone),
-    field('openingBalance', 'الحساب القديم', existing && existing.openingBalance ? existing.openingBalance : '', 'number'),
+    moneyField('openingBalance', 'الحساب القديم', existing && existing.openingBalance ? existing.openingBalance : ''),
     fieldFull('address', 'العنوان', existing && existing.address),
     fieldFull('notes', 'ملاحظات', existing && existing.notes, true),
   ]);
@@ -248,7 +285,7 @@ function openCustomerForm(existing) {
     el('button', { class: 'btn btn-primary', onclick: async () => {
       const data = readFields(body, ['name', 'phone', 'address', 'notes', 'openingBalance']);
       if (!data.name.trim()) { toast('الاسم مطلوب', true); return; }
-      data.openingBalance = Number(data.openingBalance) || 0;
+      data.openingBalance = parseMoneyStr(data.openingBalance);
       if (isEdit) await window.api.customers.update(existing.id, data);
       else await window.api.customers.add(data);
       closeModal();
@@ -261,7 +298,7 @@ function openCustomerForm(existing) {
 }
 
 async function deleteCustomer(id) {
-  if (!confirm('هل تريد حذف هذا العميل؟')) return;
+  if (!(await confirmModal('هل تريد حذف هذا العميل؟'))) return;
   const res = await window.api.customers.delete(id);
   if (!res.ok) {
     toast('لا يمكن حذف عميل مرتبط بفواتير موجودة', true);
@@ -308,15 +345,16 @@ async function quickSettleForCustomer(customerId, onDone) {
     return new Date(a.inv.date) - new Date(b.inv.date);
   });
 
-  const totalAmountInput = el('input', { class: 'input', type: 'number', min: '0', max: String(grandTotal), step: '0.01', placeholder: 'أدخل المبلغ المدفوع' });
+  const totalAmountInput = moneyInput({ class: 'input', placeholder: 'أدخل المبلغ المدفوع' });
   const totalDateInput = el('input', { class: 'input', type: 'date', value: todayInputValue() });
   const totalNotesInput = el('textarea', { class: 'input', rows: 2 });
 
   const settleFromTotal = async () => {
-    let leftover = Number(totalAmountInput.value) || 0;
+    let leftover = numVal(totalAmountInput);
     if (leftover <= 0) { toast('أدخل مبلغاً صحيحاً أكبر من صفر', true); return; }
     const paymentDate = totalDateInput.value ? new Date(totalDateInput.value).toISOString() : new Date().toISOString();
     const notes = totalNotesInput.value;
+    const batchId = 'batch_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     for (const item of sortedForSettlement) {
       if (leftover <= 0.001) break;
       const remaining = getRemaining(item);
@@ -332,6 +370,7 @@ async function quickSettleForCustomer(customerId, onDone) {
           amount: applied,
           date: paymentDate,
           notes,
+          batchId,
         });
       }
       leftover -= applied;
@@ -384,12 +423,12 @@ async function quickSettleForCustomer(customerId, onDone) {
 
 function openOpeningBalanceSettleForm(customer, onDone) {
   const body = el('div', { class: 'form-grid single' }, [
-    field('amount', 'المبلغ المسدد', customer.openingBalance, 'number'),
+    moneyField('amount', 'المبلغ المسدد', customer.openingBalance),
   ]);
   const footer = [
     el('button', { class: 'btn btn-primary', onclick: async () => {
       const raw = readFields(body, ['amount']);
-      const amount = Number(raw.amount) || 0;
+      const amount = parseMoneyStr(raw.amount);
       if (amount <= 0) { toast('أدخل مبلغاً صحيحاً أكبر من صفر', true); return; }
       const newBalance = (Number(customer.openingBalance) || 0) - amount;
       await window.api.customers.update(customer.id, { openingBalance: newBalance });
@@ -438,10 +477,30 @@ function buildCustomerLedger(customer, sales, payments) {
   if (opening) {
     events.push({ date: (customer && customer.createdAt) || new Date(0).toISOString(), label: 'حساب قديم', amount: opening });
   }
-  sales.forEach((i) => events.push({ date: i.date, label: 'فاتورة بيع ' + i.number, amount: i.total }));
-  payments
-    .filter((p) => p.invoiceType === 'sale')
-    .forEach((p) => events.push({ date: p.date, label: 'تسديد — فاتورة ' + p.invoiceNumber, amount: -p.amount }));
+  sales.forEach((i) => {
+    events.push({ date: i.date, label: 'فاتورة بيع ' + i.number, amount: i.total });
+    // أي مبلغ دُفع عند إنشاء/تعديل الفاتورة مباشرة (paidAmount) دون المرور بعملية "تسديد" منفصلة
+    const paidViaPayments = payments
+      .filter((p) => p.invoiceType === 'sale' && p.invoiceId === i.id)
+      .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const paidAtCreation = Math.max(0, (Number(i.paidAmount) || 0) - paidViaPayments);
+    if (paidAtCreation > 0.001) {
+      events.push({ date: i.date, label: 'دفعة عند البيع — فاتورة ' + i.number, amount: -paidAtCreation });
+    }
+  });
+  const salePayments = payments.filter((p) => p.invoiceType === 'sale');
+  const batched = {};
+  const single = [];
+  salePayments.forEach((p) => {
+    if (p.batchId) {
+      if (!batched[p.batchId]) batched[p.batchId] = { date: p.date, amount: 0 };
+      batched[p.batchId].amount += Number(p.amount) || 0;
+    } else {
+      single.push(p);
+    }
+  });
+  single.forEach((p) => events.push({ date: p.date, label: 'تسديد — فاتورة ' + p.invoiceNumber, amount: -p.amount }));
+  Object.values(batched).forEach((b) => events.push({ date: b.date, label: 'تسديد', amount: -b.amount }));
   events.sort((a, b) => new Date(a.date) - new Date(b.date));
   let running = 0;
   return events.map((e) => {
@@ -459,7 +518,7 @@ function customerLedgerTable(events) {
   const tbody = el('tbody');
   events.forEach((e) => {
     tbody.appendChild(el('tr', {}, [
-      el('td', {}, [formatDate(e.date)]),
+      el('td', {}, [formatDate(e.date, true)]),
       el('td', {}, [e.label]),
       el('td', { class: 'num' }, [el('span', { class: e.amount >= 0 ? 'amt-us' : 'amt-them' }, [formatMoney(Math.abs(e.amount))])]),
       el('td', { class: 'num' }, [Math.abs(e.balance) > 0.001 ? el('span', { class: e.balance >= 0 ? 'amt-us' : 'amt-them' }, [formatMoney(Math.abs(e.balance))]) : formatMoney(0)]),
@@ -479,7 +538,7 @@ function paymentsHistoryTable(list) {
   const tbody = el('tbody');
   list.forEach((p) => {
     tbody.appendChild(el('tr', {}, [
-      el('td', {}, [formatDate(p.date)]),
+      el('td', {}, [formatDate(p.date, true)]),
       el('td', {}, [p.invoiceType === 'sale' ? 'بيع (وارد منّا)' : 'شراء (صادر لنا)']),
       el('td', {}, [p.invoiceNumber]),
       el('td', { class: 'num' }, [formatMoney(p.amount)]),
@@ -504,7 +563,7 @@ function miniInvoiceTable(list, type, onPaid) {
     const actions = [['🖨 طباعة', () => printInvoice(type, i.id)]];
     if (remaining > 0.001) actions.push(['تسديد', () => openPaymentForm(type, i, onPaid)]);
     tbody.appendChild(el('tr', {}, [
-      el('td', {}, [i.number]), el('td', {}, [formatDate(i.date)]),
+      el('td', {}, [i.number]), el('td', {}, [formatDate(i.date, true)]),
       el('td', { class: 'num' }, [formatMoney(i.total)]),
       el('td', { class: 'num' }, [remaining > 0.001 ? el('span', { class: remClass }, [formatMoney(remaining)]) : 'مسددة']),
       el('td', {}, [rowActions(actions)]),
@@ -592,7 +651,7 @@ async function renderInvoices(area, type) {
       tbody.appendChild(el('tr', {}, [
         el('td', {}, [inv.number]),
         el('td', {}, [customerName(inv.customerId)]),
-        el('td', {}, [formatDate(inv.date)]),
+        el('td', {}, [formatDate(inv.date, true)]),
         el('td', { class: 'num' }, [formatMoney(inv.total)]),
         el('td', { class: 'num' }, [(() => {
           const remaining = inv.total - inv.paidAmount;
@@ -611,7 +670,7 @@ async function renderInvoices(area, type) {
 }
 
 async function deleteInvoiceRow(type, id) {
-  if (!confirm('هل تريد حذف هذه الفاتورة؟ سيتم حذف الدفعات المرتبطة بها أيضاً.')) return;
+  if (!(await confirmModal('هل تريد حذف هذه الفاتورة؟ سيتم حذف الدفعات المرتبطة بها أيضاً.'))) return;
   await window.api.invoices.delete(type, id);
   toast('تم حذف الفاتورة');
   navigate(type === 'sale' ? 'sales' : 'purchases');
@@ -633,17 +692,17 @@ function openInvoiceForm(type, existing, presetCustomerId, onDone) {
   body.appendChild(grid);
 
   const amountLabel = type === 'sale' ? 'المبلغ (الأساسي)' : 'المبلغ (مطلوب)';
-  const amountInput = el('input', { class: 'input', type: 'number', min: '0', step: '0.01', value: existing ? existing.amount : 0 });
-  const discountInput = el('input', { class: 'input', type: 'number', min: '0', step: '0.01', value: existing ? existing.discount : 0 });
-  const paidInput = el('input', { class: 'input', type: 'number', min: '0', step: '0.01', value: existing ? existing.paidAmount : 0 });
+  const amountInput = moneyInput({ class: 'input', value: existing ? existing.amount : 0 });
+  const discountInput = moneyInput({ class: 'input', value: existing ? existing.discount : 0 });
+  const paidInput = moneyInput({ class: 'input', value: existing ? existing.paidAmount : 0 });
   const notesInput = el('textarea', { class: 'input', rows: 2 }, [existing ? existing.notes : '']);
   const grandTotalLine = el('div', { style: 'text-align:left; font-weight:700; margin-top:10px; font-size:15px' }, ['الإجمالي: 0.00']);
 
   function recalcTotals() {
-    const total = Math.max(0, (Number(amountInput.value) || 0) - (Number(discountInput.value) || 0));
+    const total = Math.max(0, numVal(amountInput) - numVal(discountInput));
     const d = currencyDecimals((STATE.settings && STATE.settings.currency) || '');
     grandTotalLine.textContent = 'الإجمالي: ' + total.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
-    if (Number(paidInput.value) > total) paidInput.value = total.toFixed(2);
+    if (numVal(paidInput) > total) paidInput.value = formatMoneyInputStr(total.toFixed(2));
   }
 
   const totalsGrid = el('div', { class: 'form-grid', style: 'margin-top:14px' }, [
@@ -661,14 +720,14 @@ function openInvoiceForm(type, existing, presetCustomerId, onDone) {
 
   const footer = [
     el('button', { class: 'btn btn-primary', onclick: async () => {
-      const amount = Number(amountInput.value) || 0;
+      const amount = numVal(amountInput);
       if (amount <= 0) { toast('أدخل مبلغاً أكبر من صفر', true); return; }
       const data = {
         customerId: custSelect.value,
         date: dateInput.value ? new Date(dateInput.value).toISOString() : new Date().toISOString(),
         amount,
-        discount: Number(discountInput.value) || 0,
-        paidAmount: Number(paidInput.value) || 0,
+        discount: numVal(discountInput),
+        paidAmount: numVal(paidInput),
         notes: notesInput.value,
       };
       if (isEdit) {
@@ -693,7 +752,7 @@ function openInvoiceForm(type, existing, presetCustomerId, onDone) {
 
 function openPaymentForm(type, invoice, onDone) {
   const remaining = invoice.total - invoice.paidAmount;
-  const amountInput = el('input', { class: 'input', type: 'number', min: '0', max: String(remaining), step: '0.01', placeholder: 'أدخل المبلغ المدفوع' });
+  const amountInput = moneyInput({ class: 'input', placeholder: 'أدخل المبلغ المدفوع' });
   const dateInput = el('input', { class: 'input', type: 'date', value: todayInputValue() });
   const notesInput = el('textarea', { class: 'input', rows: 2 });
   const body = el('div', { class: 'form-grid' }, [
@@ -704,7 +763,7 @@ function openPaymentForm(type, invoice, onDone) {
   ]);
   const footer = [
     el('button', { class: 'btn btn-primary', onclick: async () => {
-      const amount = Number(amountInput.value) || 0;
+      const amount = numVal(amountInput);
       if (amount <= 0) { toast('أدخل مبلغاً صحيحاً', true); return; }
       const res = await window.api.payments.add({
         invoiceId: invoice.id,
@@ -817,7 +876,7 @@ async function renderHistory(area) {
     const tbody = el('tbody');
     list.forEach((h) => {
       tbody.appendChild(el('tr', {}, [
-        el('td', {}, [formatDate(h.date)]),
+        el('td', {}, [formatDate(h.date, true)]),
         el('td', {}, [customerName(h.customerId)]),
         el('td', {}, [KIND_LABEL[h.kind] || h.kind]),
         el('td', {}, [h.label]),
@@ -1004,6 +1063,18 @@ function closeModal() {
   qs('#modalRoot').innerHTML = '';
 }
 
+// تأكيد غير حاجب (بديل عن confirm() الأصلي الذي قد يتجمد داخل نافذة Electron المعزولة)
+function confirmModal(message) {
+  return new Promise((resolve) => {
+    const body = el('div', {}, [el('p', {}, [message])]);
+    const footer = [
+      el('button', { class: 'btn btn-primary', onclick: () => { closeModal(); resolve(true); } }, ['تأكيد']),
+      el('button', { class: 'btn btn-ghost', onclick: () => { closeModal(); resolve(false); } }, ['إلغاء']),
+    ];
+    openModal('تأكيد', body, footer);
+  });
+}
+
 // ---------------- الطباعة والمعاينة ----------------
 function openPrintPreview(html, pdfName) {
   qs('#printArea').innerHTML = html;
@@ -1044,7 +1115,7 @@ async function printInvoice(type, id) {
   ]);
   const cust = STATE.customersCache.find((c) => c.id === inv.customerId);
   const label = type === 'sale' ? 'فاتورة بيع' : 'فاتورة شراء';
-  const meta = '<div class="doc-meta">رقم: ' + esc(inv.number) + '<br/>التاريخ: ' + formatDate(inv.date) + '</div>';
+  const meta = '<div class="doc-meta">رقم: ' + esc(inv.number) + '<br/>التاريخ: ' + formatDate(inv.date, true) + '</div>';
 
   const amountLabel = type === 'sale' ? 'المبلغ (الأساسي)' : 'المبلغ (مطلوب)';
 
@@ -1086,19 +1157,42 @@ async function printCustomerStatement(customerId) {
       credit: opening < 0 ? -opening : 0,
     });
   }
-  mySales.forEach((i) => events.push({ date: i.date, label: 'فاتورة بيع ' + i.number, debit: i.total, credit: 0 }));
-  myPurchases.forEach((i) => events.push({ date: i.date, label: 'فاتورة شراء ' + i.number, debit: 0, credit: i.total }));
-  myPayments.forEach((p) => events.push({
+  mySales.forEach((i) => {
+    events.push({ date: i.date, label: 'فاتورة بيع ' + i.number, debit: i.total, credit: 0 });
+    const paidViaPayments = myPayments.filter((p) => p.invoiceType === 'sale' && p.invoiceId === i.id).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const paidAtCreation = Math.max(0, (Number(i.paidAmount) || 0) - paidViaPayments);
+    if (paidAtCreation > 0.001) events.push({ date: i.date, label: 'دفعة عند البيع — فاتورة ' + i.number, debit: 0, credit: paidAtCreation });
+  });
+  myPurchases.forEach((i) => {
+    events.push({ date: i.date, label: 'فاتورة شراء ' + i.number, debit: 0, credit: i.total });
+    const paidViaPayments = myPayments.filter((p) => p.invoiceType === 'purchase' && p.invoiceId === i.id).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+    const paidAtCreation = Math.max(0, (Number(i.paidAmount) || 0) - paidViaPayments);
+    if (paidAtCreation > 0.001) events.push({ date: i.date, label: 'دفعة عند الشراء — فاتورة ' + i.number, debit: paidAtCreation, credit: 0 });
+  });
+  const batchedSale = {}, batchedPurchase = {};
+  const singlePayments = [];
+  myPayments.forEach((p) => {
+    if (p.batchId) {
+      const bucket = p.invoiceType === 'sale' ? batchedSale : batchedPurchase;
+      if (!bucket[p.batchId]) bucket[p.batchId] = { date: p.date, amount: 0 };
+      bucket[p.batchId].amount += Number(p.amount) || 0;
+    } else {
+      singlePayments.push(p);
+    }
+  });
+  singlePayments.forEach((p) => events.push({
     date: p.date,
     label: (p.invoiceType === 'sale' ? 'دفعة مستلمة — ' : 'دفعة مسددة — ') + p.invoiceNumber,
     debit: p.invoiceType === 'purchase' ? p.amount : 0,
     credit: p.invoiceType === 'sale' ? p.amount : 0,
   }));
+  Object.values(batchedSale).forEach((b) => events.push({ date: b.date, label: 'دفعة مستلمة (تسديد مجمّع)', debit: 0, credit: b.amount }));
+  Object.values(batchedPurchase).forEach((b) => events.push({ date: b.date, label: 'دفعة مسددة (تسديد مجمّع)', debit: b.amount, credit: 0 }));
   events.sort((a, b) => new Date(a.date) - new Date(b.date));
 
   let rows = '';
   events.forEach((e) => {
-    rows += '<tr><td>' + formatDate(e.date) + '</td><td>' + esc(e.label) + '</td><td>' + (e.debit ? '<span class="amt-us">' + formatMoney(e.debit) + '</span>' : '—') + '</td><td>' + (e.credit ? '<span class="amt-them">' + formatMoney(e.credit) + '</span>' : '—') + '</td></tr>';
+    rows += '<tr><td>' + formatDate(e.date, true) + '</td><td>' + esc(e.label) + '</td><td>' + (e.debit ? '<span class="amt-us">' + formatMoney(e.debit) + '</span>' : '—') + '</td><td>' + (e.credit ? '<span class="amt-them">' + formatMoney(e.credit) + '</span>' : '—') + '</td></tr>';
   });
   const theyOweUs = mySales.reduce((s, i) => s + (i.total - i.paidAmount), 0) + (opening > 0 ? opening : 0);
   const weOweThem = myPurchases.reduce((s, i) => s + (i.total - i.paidAmount), 0) + (opening < 0 ? -opening : 0);
@@ -1119,7 +1213,7 @@ function printHistoryReport(list) {
   let rows = '';
   const KIND_LABEL = { sale_invoice: 'فاتورة بيع', purchase_invoice: 'فاتورة شراء', sale_payment: 'دفعة بيع', purchase_payment: 'دفعة شراء' };
   list.forEach((h) => {
-    rows += '<tr><td>' + formatDate(h.date) + '</td><td>' + esc(customerName(h.customerId)) + '</td><td>' + (KIND_LABEL[h.kind] || h.kind) + '</td><td>' + formatMoney(h.amount) + '</td></tr>';
+    rows += '<tr><td>' + formatDate(h.date, true) + '</td><td>' + esc(customerName(h.customerId)) + '</td><td>' + (KIND_LABEL[h.kind] || h.kind) + '</td><td>' + formatMoney(h.amount) + '</td></tr>';
   });
   const total = list.reduce((s, h) => s + h.amount, 0);
   const meta = '<div class="doc-meta">عدد الحركات: ' + list.length + '<br/>تاريخ التقرير: ' + formatDate(new Date().toISOString()) + '</div>';

@@ -267,6 +267,7 @@ function addPayment(data) {
     amount,
     date: data.date || nowIso(),
     notes: data.notes || '',
+    batchId: data.batchId || null,
     createdAt: nowIso(),
   };
   cache.payments.push(payment);
