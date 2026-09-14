@@ -1,6 +1,15 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
+  system: {
+    openExternal: (url) => ipcRenderer.invoke('system:openExternal', url),
+  },
+  license: {
+    getStatus: () => ipcRenderer.invoke('license:getStatus'),
+    activate: (key) => ipcRenderer.invoke('license:activate', key),
+    enterApp: () => ipcRenderer.invoke('license:enterApp'),
+    deactivate: () => ipcRenderer.invoke('license:deactivate'),
+  },
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
     update: (patch) => ipcRenderer.invoke('settings:update', patch),

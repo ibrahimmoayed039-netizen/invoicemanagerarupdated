@@ -29,6 +29,17 @@ function el(tag, attrs, children) {
   });
   return node;
 }
+function applyBrandLogo() {
+  const mark = qs('#brandMark');
+  if (!mark) return;
+  const logo = STATE.settings && STATE.settings.companyLogo;
+  if (logo) {
+    mark.innerHTML = '';
+    mark.appendChild(el('img', { src: logo, alt: 'شعار المنشأة' }));
+  } else {
+    mark.textContent = 'ف';
+  }
+}
 function esc(s) {
   return String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
@@ -69,15 +80,40 @@ function moneyField(name, label, value) {
   const input = moneyInput({ class: 'input', 'data-field': name, value: value || 0 });
   return el('div', { class: 'field' }, [el('label', {}, [label]), input]);
 }
-function currencyDecimals(cur) {
-  // الدينار العراقي عملياً بلا كسور (لا تُستخدم الفلوس في التعاملات اليومية)
-  return cur === 'د.ع' ? 0 : 2;
+// ---------------- حقل مبلغ تسديد بعملة ثابتة (بدون أي تحويل تلقائي) ----------------
+// يُستخدم لتسديد فاتورة/رصيد سابق بعينه؛ العملة دائماً هي عملة الفاتورة نفسها (لا تحويل بين الدينار والدولار).
+function buildPaymentAmountBlock(labelText, defaultAmount, currency) {
+  const cur = currency === 'USD' ? 'USD' : 'IQD';
+  const amountInput = moneyInput({ class: 'input', placeholder: 'أدخل المبلغ', value: defaultAmount || '' });
+  const wrap = el('div', { class: 'field' }, [el('label', {}, [labelText + ' (' + currencyLabel(cur) + ')']), amountInput]);
+  return {
+    nodes: [wrap],
+    getResult: () => {
+      const amount = numVal(amountInput);
+      if (amount <= 0) return null;
+      return { amount, currency: cur };
+    },
+  };
 }
-function formatMoney(n) {
+// عنوان قصير للعملة يُعرض داخل النماذج والجداول
+function currencyLabel(cur) {
+  if (cur === 'USD') return 'دولار $';
+  return (STATE.settings && STATE.settings.currency) || 'دينار';
+}
+function decimalsForCurrency(cur) {
+  if (cur === 'USD') return 2;
+  // الدينار العراقي عملياً بلا كسور (لا تُستخدم الفلوس في التعاملات اليومية)
+  const label = (STATE.settings && STATE.settings.currency) || '';
+  return label === 'د.ع' ? 0 : 2;
+}
+function formatMoney(n, currency) {
+  const cur = currency === 'USD' ? 'USD' : 'IQD';
   const val = Number(n || 0);
-  const cur = (STATE.settings && STATE.settings.currency) || '';
-  const d = currencyDecimals(cur);
-  return val.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }) + ' ' + cur;
+  const d = decimalsForCurrency(cur);
+  const numStr = val.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+  if (cur === 'USD') return '$' + numStr;
+  const label = (STATE.settings && STATE.settings.currency) || '';
+  return numStr + ' ' + label;
 }
 function formatDate(iso, withTime) {
   if (!iso) return '—';
@@ -89,6 +125,15 @@ function formatDate(iso, withTime) {
 function todayInputValue() {
   const d = new Date();
   return d.toISOString().slice(0, 10);
+}
+function dateInputToISO(value) {
+  // value is "YYYY-MM-DD" from a <input type="date">. Build it in LOCAL time
+  // (not UTC) so it doesn't shift to 03:00 (or any other hour) once displayed
+  // in the user's timezone. Falls back to "now" when empty.
+  if (!value) return new Date().toISOString();
+  const [y, m, d] = value.split('-').map(Number);
+  const local = new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
+  return local.toISOString();
 }
 function toast(msg, isError) {
   const root = qs('#toastRoot');
@@ -110,6 +155,7 @@ const VIEW_TITLES = {
   dues: 'تسديد العملاء',
   history: 'السجل والتاريخ',
   settings: 'الإعدادات',
+  about: 'عن البرنامج',
 };
 
 async function navigate(view) {
@@ -127,6 +173,7 @@ async function navigate(view) {
     else if (view === 'dues') await renderDues(area);
     else if (view === 'history') await renderHistory(area);
     else if (view === 'settings') await renderSettings(area);
+    else if (view === 'about') await renderAbout(area);
   } catch (err) {
     console.error(err);
     area.innerHTML = '';
@@ -151,8 +198,10 @@ async function renderDashboard(area) {
 
   const grid = el('div', { class: 'stat-grid' }, [
     statCard('عدد العملاء', summary.customersCount, ''),
-    statCard('إجمالي المبيعات', formatMoney(summary.totalSales), ''),
-    statCard('الباقي من العملاء', formatMoney(summary.totalTheyOweUs), 'owed-us'),
+    statCard('المبيعات (دينار)', formatMoney(summary.totalSales, 'IQD'), ''),
+    statCard('المبيعات (دولار)', formatMoney(summary.totalSalesUsd, 'USD'), ''),
+    statCard('الباقي من العملاء (دينار)', formatMoney(summary.totalTheyOweUs, 'IQD'), 'owed-us'),
+    statCard('الباقي من العملاء (دولار)', formatMoney(summary.totalTheyOweUsUsd, 'USD'), 'owed-us'),
   ]);
   area.appendChild(grid);
 
@@ -174,7 +223,7 @@ async function renderDashboard(area) {
       el('td', {}, [formatDate(h.date, true)]),
       el('td', {}, [customerName(h.customerId)]),
       el('td', {}, [h.label]),
-      el('td', { class: 'num' }, [formatMoney(h.amount)]),
+      el('td', { class: 'num' }, [formatMoney(h.amount, h.currency)]),
     ]));
   });
   table.appendChild(tbody);
@@ -215,34 +264,48 @@ async function renderCustomers(area) {
   area.appendChild(wrap);
 
   function balanceFor(id) {
-    let theyOweUs = 0, weOweThem = 0;
+    let theyOweUs = 0, weOweThem = 0, theyOweUsUsd = 0, weOweThemUsd = 0;
     const c = customers.find((x) => x.id === id);
     const opening = (c && Number(c.openingBalance)) || 0;
+    const openingUsd = (c && Number(c.openingBalanceUsd)) || 0;
     if (opening > 0) theyOweUs += opening;
     else if (opening < 0) weOweThem += -opening;
-    sales.filter((i) => i.customerId === id).forEach((i) => { theyOweUs += i.total - i.paidAmount; });
-    purchases.filter((i) => i.customerId === id).forEach((i) => { weOweThem += i.total - i.paidAmount; });
-    return { theyOweUs, weOweThem };
+    if (openingUsd > 0) theyOweUsUsd += openingUsd;
+    else if (openingUsd < 0) weOweThemUsd += -openingUsd;
+    sales.filter((i) => i.customerId === id).forEach((i) => {
+      if (i.currency === 'USD') theyOweUsUsd += i.total - i.paidAmount;
+      else theyOweUs += i.total - i.paidAmount;
+    });
+    purchases.filter((i) => i.customerId === id).forEach((i) => {
+      if (i.currency === 'USD') weOweThemUsd += i.total - i.paidAmount;
+      else weOweThem += i.total - i.paidAmount;
+    });
+    return { theyOweUs, weOweThem, theyOweUsUsd, weOweThemUsd };
   }
 
+  let customersPage = 1;
   function draw(list) {
     wrap.innerHTML = '';
     if (list.length === 0) {
       wrap.appendChild(emptyState('لا يوجد عملاء', 'اضغط على "عميل جديد" لإضافة أول عميل.'));
       return;
     }
+    const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+    if (customersPage > totalPages) customersPage = totalPages;
+    const pageList = list.slice((customersPage - 1) * PAGE_SIZE, customersPage * PAGE_SIZE);
     const table = el('table', {}, [el('thead', {}, [el('tr', {}, [
       el('th', {}, ['الاسم']), el('th', {}, ['الهاتف']), el('th', {}, ['العنوان']),
-      el('th', {}, ['الباقي']), el('th', {}, ['إجراءات']),
+      el('th', {}, ['الباقي (دينار)']), el('th', {}, ['الباقي (دولار)']), el('th', {}, ['إجراءات']),
     ])])]);
     const tbody = el('tbody');
-    list.forEach((c) => {
+    pageList.forEach((c) => {
       const bal = balanceFor(c.id);
       tbody.appendChild(el('tr', {}, [
-        el('td', {}, [c.name]),
+        el('td', {}, [c.name, c.dealsInUsd ? el('span', { class: 'badge-usd' }, [' $']) : null]),
         el('td', {}, [c.phone || '—']),
         el('td', {}, [c.address || '—']),
-        el('td', { class: 'num' }, [bal.theyOweUs > 0.001 ? el('span', { class: 'amt-us' }, [formatMoney(bal.theyOweUs)]) : '—']),
+        el('td', { class: 'num' }, [bal.theyOweUs > 0.001 ? el('span', { class: 'amt-us' }, [formatMoney(bal.theyOweUs, 'IQD')]) : '—']),
+        el('td', { class: 'num' }, [bal.theyOweUsUsd > 0.001 ? el('span', { class: 'amt-us' }, [formatMoney(bal.theyOweUsUsd, 'USD')]) : '—']),
         el('td', {}, [rowActions([
           ['بيع', () => openInvoiceForm('sale', null, c.id, () => navigate('customers'))],
           ['تسديد', () => quickSettleForCustomer(c.id)],
@@ -254,12 +317,47 @@ async function renderCustomers(area) {
     });
     table.appendChild(tbody);
     wrap.appendChild(table);
+    const pager = buildPager(customersPage, totalPages, (p) => { customersPage = p; draw(list); });
+    if (pager) wrap.appendChild(pager);
   }
   draw(customers);
   search.addEventListener('input', () => {
+    customersPage = 1;
     const q = search.value.trim().toLowerCase();
     draw(customers.filter((c) => c.name.toLowerCase().includes(q) || (c.phone || '').includes(q)));
   });
+}
+
+const PAGE_SIZE = 20; // بعد هذا العدد من الصفوف تتحوّل القائمة إلى صفحات
+
+// شريط تنقل بين الصفحات — يُستخدم في كل الجداول الطويلة (فواتير، عملاء، سجل)
+function buildPager(page, totalPages, onChange) {
+  if (totalPages <= 1) return null;
+  const bar = el('div', { class: 'pager' });
+  const btn = (label, target, disabled, active) => el('button', {
+    class: 'btn btn-ghost btn-sm pager-btn' + (active ? ' active' : ''),
+    disabled: disabled ? true : undefined,
+    onclick: disabled ? undefined : () => onChange(target),
+  }, [label]);
+
+  bar.appendChild(btn('‹ السابق', page - 1, page <= 1));
+
+  const pages = [];
+  const add = (n) => { if (n >= 1 && n <= totalPages && !pages.includes(n)) pages.push(n); };
+  add(1); add(totalPages);
+  for (let p = page - 1; p <= page + 1; p++) add(p);
+  pages.sort((a, b) => a - b);
+
+  let prevShown = 0;
+  pages.forEach((p) => {
+    if (p - prevShown > 1) bar.appendChild(el('span', { class: 'pager-ellipsis' }, ['…']));
+    bar.appendChild(btn(String(p), p, false, p === page));
+    prevShown = p;
+  });
+
+  bar.appendChild(btn('التالي ›', page + 1, page >= totalPages));
+  bar.appendChild(el('span', { class: 'pager-info' }, ['(إجمالي ' + totalPages + ' صفحة)']));
+  return bar;
 }
 
 function rowActions(pairs) {
@@ -272,20 +370,30 @@ function rowActions(pairs) {
 
 function openCustomerForm(existing) {
   const isEdit = !!existing;
+  const dealsInUsdInput = el('input', { type: 'checkbox', id: 'custDealsInUsd', checked: existing && existing.dealsInUsd ? true : undefined });
   const body = el('div', { class: 'form-grid' }, [
     field('name', 'الاسم *', existing && existing.name),
     field('phone', 'رقم الهاتف', existing && existing.phone),
-    moneyField('openingBalance', 'الحساب القديم', existing && existing.openingBalance ? existing.openingBalance : ''),
+    moneyField('openingBalance', 'الحساب القديم بالدينار', existing && existing.openingBalance ? existing.openingBalance : ''),
+    moneyField('openingBalanceUsd', 'الحساب القديم بالدولار', existing && existing.openingBalanceUsd ? existing.openingBalanceUsd : ''),
     fieldFull('address', 'العنوان', existing && existing.address),
     fieldFull('notes', 'ملاحظات', existing && existing.notes, true),
+    el('div', { class: 'field field-full', style: 'flex-direction:row;align-items:center;gap:8px' }, [
+      dealsInUsdInput,
+      el('label', { for: 'custDealsInUsd' }, ['هذا العميل يتعامل بالدولار عادةً']),
+    ]),
   ]);
-  const hint = el('div', { class: 'field-hint' }, ['الحساب القديم: أدخل رقماً موجباً إذا كان للعميل دين من قبل استخدام البرنامج، أو سالباً إذا كنتم مدينين له، واتركه فارغاً إن لم يوجد. أما الحساب الجديد فيُحسب تلقائياً من الفواتير والتسديدات التي تسجّلها داخل البرنامج.']);
-  body.insertBefore(hint, body.children[3]);
+  const hint = el('div', { class: 'field-hint field-full' }, ['حساب الدينار وحساب الدولار مستقلان تماماً عن بعضهما، بدون أي تحويل تلقائي بينهما. أدخل رقماً موجباً إذا كان للعميل دين من قبل استخدام البرنامج، أو سالباً إذا كنتم مدينين له، واتركه فارغاً إن لم يوجد. أما الحساب الجديد فيُحسب تلقائياً من الفواتير والتسديدات التي تسجّلها داخل البرنامج لكل عملة على حدة.']);
+  body.insertBefore(hint, body.children[4]);
+  const usdHint = el('div', { class: 'field-hint' }, ['عند التفعيل، ستُقترح عملة الدولار تلقائياً كافتراضي عند إنشاء فاتورة جديدة لهذا العميل.']);
+  body.appendChild(usdHint);
   const footer = [
     el('button', { class: 'btn btn-primary', onclick: async () => {
-      const data = readFields(body, ['name', 'phone', 'address', 'notes', 'openingBalance']);
+      const data = readFields(body, ['name', 'phone', 'address', 'notes', 'openingBalance', 'openingBalanceUsd']);
       if (!data.name.trim()) { toast('الاسم مطلوب', true); return; }
       data.openingBalance = parseMoneyStr(data.openingBalance);
+      data.openingBalanceUsd = parseMoneyStr(data.openingBalanceUsd);
+      data.dealsInUsd = dealsInUsdInput.checked;
       if (isEdit) await window.api.customers.update(existing.id, data);
       else await window.api.customers.add(data);
       closeModal();
@@ -316,12 +424,14 @@ async function quickSettleForCustomer(customerId, onDone) {
     window.api.customers.get(customerId),
   ]);
   const dueSales = sales.filter((i) => i.customerId === customerId && (i.total - i.paidAmount) > 0.001)
-    .map((i) => ({ type: 'sale', inv: i }));
+    .map((i) => ({ type: 'sale', inv: i, currency: i.currency === 'USD' ? 'USD' : 'IQD' }));
   const duePurchases = purchases.filter((i) => i.customerId === customerId && (i.total - i.paidAmount) > 0.001)
-    .map((i) => ({ type: 'purchase', inv: i }));
+    .map((i) => ({ type: 'purchase', inv: i, currency: i.currency === 'USD' ? 'USD' : 'IQD' }));
   const dueList = [...dueSales, ...duePurchases];
   const openingDue = customer && Number(customer.openingBalance) > 0.001 ? Number(customer.openingBalance) : 0;
-  if (openingDue) dueList.push({ type: 'opening', customer, amount: openingDue });
+  if (openingDue) dueList.push({ type: 'opening', customer, amount: openingDue, currency: 'IQD' });
+  const openingDueUsd = customer && Number(customer.openingBalanceUsd) > 0.001 ? Number(customer.openingBalanceUsd) : 0;
+  if (openingDueUsd) dueList.push({ type: 'opening', customer, amount: openingDueUsd, currency: 'USD' });
 
   if (dueList.length === 0) {
     toast('لا توجد مبالغ مستحقة لهذا العميل', true);
@@ -329,72 +439,82 @@ async function quickSettleForCustomer(customerId, onDone) {
   }
   if (dueList.length === 1) {
     const item = dueList[0];
-    if (item.type === 'opening') openOpeningBalanceSettleForm(item.customer, finish);
+    if (item.type === 'opening') openOpeningBalanceSettleForm(item.customer, item.currency, finish);
     else openPaymentForm(item.type, item.inv, finish);
     return;
   }
 
-  // أكثر من بند مستحق: اعرض المجموع الكلي مع إمكانية التسديد منه دفعة واحدة، أو اختيار بند بعينه
+  // حساب الدينار وحساب الدولار مستقلان تماماً؛ لا يمكن تسديد مبلغ واحد يغطي بنوداً من عملتين مختلفتين
   const getRemaining = (item) => (item.type === 'opening' ? item.amount : (item.inv.total - item.inv.paidAmount));
-  const grandTotal = dueList.reduce((sum, item) => sum + getRemaining(item), 0);
+  const iqdItems = dueList.filter((i) => i.currency === 'IQD');
+  const usdItems = dueList.filter((i) => i.currency === 'USD');
 
-  // ترتيب البنود من الأقدم للأحدث عند التوزيع (الرصيد السابق يُعتبر الأقدم دائماً)
-  const sortedForSettlement = dueList.slice().sort((a, b) => {
-    if (a.type === 'opening') return -1;
-    if (b.type === 'opening') return 1;
-    return new Date(a.inv.date) - new Date(b.inv.date);
-  });
-
-  const totalAmountInput = moneyInput({ class: 'input', placeholder: 'أدخل المبلغ المدفوع' });
-  const totalDateInput = el('input', { class: 'input', type: 'date', value: todayInputValue() });
-  const totalNotesInput = el('textarea', { class: 'input', rows: 2 });
-
-  const settleFromTotal = async () => {
-    let leftover = numVal(totalAmountInput);
-    if (leftover <= 0) { toast('أدخل مبلغاً صحيحاً أكبر من صفر', true); return; }
-    const paymentDate = totalDateInput.value ? new Date(totalDateInput.value).toISOString() : new Date().toISOString();
-    const notes = totalNotesInput.value;
-    const batchId = 'batch_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-    for (const item of sortedForSettlement) {
-      if (leftover <= 0.001) break;
-      const remaining = getRemaining(item);
-      if (remaining <= 0.001) continue;
-      const applied = Math.min(leftover, remaining);
-      if (item.type === 'opening') {
-        const newBalance = (Number(item.customer.openingBalance) || 0) - applied;
-        await window.api.customers.update(item.customer.id, { openingBalance: newBalance });
-      } else {
-        await window.api.payments.add({
-          invoiceId: item.inv.id,
-          invoiceType: item.type,
-          amount: applied,
-          date: paymentDate,
-          notes,
-          batchId,
-        });
+  function buildTotalSettleBlock(items, currency) {
+    if (items.length === 0) return null;
+    const grandTotal = items.reduce((sum, item) => sum + getRemaining(item), 0);
+    const sorted = items.slice().sort((a, b) => {
+      if (a.type === 'opening') return -1;
+      if (b.type === 'opening') return 1;
+      return new Date(a.inv.date) - new Date(b.inv.date);
+    });
+    const amountBlock = buildPaymentAmountBlock('المبلغ المدفوع الآن (من المجموع)', undefined, currency);
+    const dateInput = el('input', { class: 'input', type: 'date', value: todayInputValue() });
+    const notesInput = el('textarea', { class: 'input', rows: 2 });
+    const settle = async () => {
+      const result = amountBlock.getResult();
+      if (!result) { toast('أدخل مبلغاً صحيحاً', true); return; }
+      let leftover = result.amount;
+      const paymentDate = dateInputToISO(dateInput.value);
+      const notes = notesInput.value;
+      const batchId = 'batch_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      for (const item of sorted) {
+        if (leftover <= 0.001) break;
+        const remaining = getRemaining(item);
+        if (remaining <= 0.001) continue;
+        const applied = Math.min(leftover, remaining);
+        if (item.type === 'opening') {
+          const field = currency === 'USD' ? 'openingBalanceUsd' : 'openingBalance';
+          const newBalance = (Number(item.customer[field]) || 0) - applied;
+          await window.api.customers.update(item.customer.id, { [field]: newBalance });
+        } else {
+          await window.api.payments.add({
+            invoiceId: item.inv.id,
+            invoiceType: item.type,
+            amount: applied,
+            date: paymentDate,
+            notes,
+            batchId,
+          });
+        }
+        leftover -= applied;
       }
-      leftover -= applied;
-    }
-    closeModal();
-    toast('تم تسجيل التسديد');
-    finish();
-  };
+      closeModal();
+      toast('تم تسجيل التسديد');
+      finish();
+    };
+    return el('div', {}, [
+      el('div', { class: 'section-title' }, ['المستحق بـ' + currencyLabel(currency)]),
+      el('div', { class: 'form-grid' }, [
+        el('div', { class: 'field field-full' }, [el('label', {}, ['المجموع الكلي المستحق']), el('div', { style: 'font-weight:700;font-size:1.1em' }, [formatMoney(grandTotal, currency)])]),
+      ]),
+      el('div', { class: 'form-grid' }, [
+        ...amountBlock.nodes,
+        el('div', { class: 'field' }, [el('label', {}, ['تاريخ الدفعة']), dateInput]),
+        el('div', { class: 'field field-full' }, [el('label', {}, ['ملاحظات']), notesInput]),
+        el('div', { class: 'field field-full' }, [el('button', { class: 'btn btn-primary', onclick: settle }, ['تسديد من مجموع ' + currencyLabel(currency)])]),
+      ]),
+    ]);
+  }
+
+  const totalBlocks = [buildTotalSettleBlock(iqdItems, 'IQD'), buildTotalSettleBlock(usdItems, 'USD')].filter(Boolean);
 
   const body = el('div', {}, [
-    el('div', { class: 'form-grid' }, [
-      el('div', { class: 'field field-full' }, [el('label', {}, ['المجموع الكلي المستحق']), el('div', { style: 'font-weight:700;font-size:1.1em' }, [formatMoney(grandTotal)])]),
-    ]),
-    el('div', { class: 'form-grid' }, [
-      el('div', { class: 'field' }, [el('label', {}, ['المبلغ المدفوع الآن (من المجموع)']), totalAmountInput]),
-      el('div', { class: 'field' }, [el('label', {}, ['تاريخ الدفعة']), totalDateInput]),
-      el('div', { class: 'field field-full' }, [el('label', {}, ['ملاحظات']), totalNotesInput]),
-      el('div', { class: 'field field-full' }, [el('button', { class: 'btn btn-primary', onclick: settleFromTotal }, ['تسديد من المجموع الكلي'])]),
-    ]),
+    ...totalBlocks,
     el('div', { class: 'section-title' }, ['أو اختر بنداً محدداً للتسديد']),
     el('div', { class: 'table-wrap' }, [
       el('table', {}, [
         el('thead', {}, [el('tr', {}, [
-          el('th', {}, ['البند']), el('th', {}, ['النوع']), el('th', {}, ['المتبقي']), el('th', {}, ['']),
+          el('th', {}, ['البند']), el('th', {}, ['النوع']), el('th', {}, ['العملة']), el('th', {}, ['المتبقي']), el('th', {}, ['']),
         ])]),
         el('tbody', {}, dueList.map((item) => {
           const isOpening = item.type === 'opening';
@@ -404,12 +524,13 @@ async function quickSettleForCustomer(customerId, onDone) {
           return el('tr', {}, [
             el('td', {}, [label]),
             el('td', {}, [typeLabel]),
-            el('td', { class: 'num' }, [formatMoney(amount)]),
+            el('td', {}, [currencyLabel(item.currency)]),
+            el('td', { class: 'num' }, [formatMoney(amount, item.currency)]),
             el('td', {}, [el('button', {
               class: 'btn btn-primary btn-sm',
               onclick: () => {
                 closeModal();
-                if (isOpening) openOpeningBalanceSettleForm(item.customer, finish);
+                if (isOpening) openOpeningBalanceSettleForm(item.customer, item.currency, finish);
                 else openPaymentForm(item.type, item.inv, finish);
               },
             }, ['تسديد'])]),
@@ -418,27 +539,27 @@ async function quickSettleForCustomer(customerId, onDone) {
       ]),
     ]),
   ]);
-  openModal('اختر البند المراد تسديده', body, [el('button', { class: 'btn btn-ghost', onclick: closeModal }, ['إلغاء'])]);
+  openModal('اختر البند المراد تسديده', body, [el('button', { class: 'btn btn-ghost', onclick: closeModal }, ['إلغاء'])], true);
 }
 
-function openOpeningBalanceSettleForm(customer, onDone) {
-  const body = el('div', { class: 'form-grid single' }, [
-    moneyField('amount', 'المبلغ المسدد', customer.openingBalance),
-  ]);
+function openOpeningBalanceSettleForm(customer, currency, onDone) {
+  const cur = currency === 'USD' ? 'USD' : 'IQD';
+  const field = cur === 'USD' ? 'openingBalanceUsd' : 'openingBalance';
+  const amountBlock = buildPaymentAmountBlock('المبلغ المسدد', customer[field], cur);
+  const body = el('div', { class: 'form-grid' }, [...amountBlock.nodes]);
   const footer = [
     el('button', { class: 'btn btn-primary', onclick: async () => {
-      const raw = readFields(body, ['amount']);
-      const amount = parseMoneyStr(raw.amount);
-      if (amount <= 0) { toast('أدخل مبلغاً صحيحاً أكبر من صفر', true); return; }
-      const newBalance = (Number(customer.openingBalance) || 0) - amount;
-      await window.api.customers.update(customer.id, { openingBalance: newBalance });
+      const result = amountBlock.getResult();
+      if (!result) { toast('أدخل مبلغاً صحيحاً', true); return; }
+      const newBalance = (Number(customer[field]) || 0) - result.amount;
+      await window.api.customers.update(customer.id, { [field]: newBalance });
       closeModal();
       toast('تم تسجيل تسديد الرصيد السابق');
       if (onDone) onDone();
     }}, ['تسجيل التسديد']),
     el('button', { class: 'btn btn-ghost', onclick: closeModal }, ['إلغاء']),
   ];
-  openModal('تسديد الحساب القديم — ' + customer.name, body, footer);
+  openModal('تسديد الحساب القديم بـ' + currencyLabel(cur) + ' — ' + customer.name, body, footer);
 }
 
 async function openCustomerProfile(id) {
@@ -450,18 +571,23 @@ async function openCustomerProfile(id) {
   const mySales = sales.filter((i) => i.customerId === id);
   const myPayments = payments.filter((p) => p.customerId === id);
 
-  const ledger = buildCustomerLedger(customer, mySales, myPayments);
-  const currentBalance = ledger.length ? ledger[ledger.length - 1].balance : 0;
-  const balanceLabel = currentBalance > 0.001 ? ' (الباقي)' : ' (مسدد بالكامل)';
+  const ledgerIqd = buildCustomerLedger(customer, mySales, myPayments, 'IQD');
+  const ledgerUsd = buildCustomerLedger(customer, mySales, myPayments, 'USD');
+  const balIqd = ledgerIqd.length ? ledgerIqd[ledgerIqd.length - 1].balance : 0;
+  const balUsd = ledgerUsd.length ? ledgerUsd[ledgerUsd.length - 1].balance : 0;
+  const balLabel = (b) => (Math.abs(b) < 0.001 ? ' (مسدد بالكامل)' : ' (الباقي)');
 
   const body = el('div', {}, [
     el('div', { class: 'form-grid' }, [
       infoLine('الهاتف', customer.phone || '—'),
       infoLine('العنوان', customer.address || '—'),
-      infoLine('الرصيد الحالي', formatMoney(Math.abs(currentBalance)) + balanceLabel),
+      infoLine('الرصيد الحالي بالدينار', formatMoney(Math.abs(balIqd), 'IQD') + balLabel(balIqd)),
+      infoLine('الرصيد الحالي بالدولار', formatMoney(Math.abs(balUsd), 'USD') + balLabel(balUsd)),
     ]),
-    el('div', { class: 'section-title' }, ['دفتر الحساب (بيع وتسديد)']),
-    customerLedgerTable(ledger.slice().reverse()),
+    el('div', { class: 'section-title' }, ['دفتر حساب الدينار (بيع وتسديد)']),
+    customerLedgerTable(ledgerIqd.slice().reverse(), 'IQD'),
+    el('div', { class: 'section-title' }, ['دفتر حساب الدولار (بيع وتسديد)']),
+    customerLedgerTable(ledgerUsd.slice().reverse(), 'USD'),
   ]);
   const footer = [
     el('button', { class: 'btn btn-primary', onclick: () => { closeModal(); printCustomerStatement(customer.id); } }, ['🖨 طباعة كشف حساب']),
@@ -470,14 +596,16 @@ async function openCustomerProfile(id) {
   openModal('ملف العميل: ' + customer.name, body, footer, true);
 }
 
-// يبني سجل حركات العميل (حساب قديم + فواتير بيع + تسديدات) مرتباً بالتاريخ مع إجمالي متحرك
-function buildCustomerLedger(customer, sales, payments) {
-  const opening = Number(customer && customer.openingBalance) || 0;
+// يبني سجل حركات العميل لعملة واحدة فقط (حساب قديم + فواتير بيع + تسديدات من نفس العملة) مرتباً بالتاريخ مع إجمالي متحرك
+function buildCustomerLedger(customer, sales, payments, currency) {
+  const cur = currency === 'USD' ? 'USD' : 'IQD';
+  const opening = cur === 'USD' ? (Number(customer && customer.openingBalanceUsd) || 0) : (Number(customer && customer.openingBalance) || 0);
   const events = [];
   if (opening) {
     events.push({ date: (customer && customer.createdAt) || new Date(0).toISOString(), label: 'حساب قديم', amount: opening });
   }
-  sales.forEach((i) => {
+  const salesInCur = sales.filter((i) => (i.currency === 'USD' ? 'USD' : 'IQD') === cur);
+  salesInCur.forEach((i) => {
     events.push({ date: i.date, label: 'فاتورة بيع ' + i.number, amount: i.total });
     // أي مبلغ دُفع عند إنشاء/تعديل الفاتورة مباشرة (paidAmount) دون المرور بعملية "تسديد" منفصلة
     const paidViaPayments = payments
@@ -488,7 +616,7 @@ function buildCustomerLedger(customer, sales, payments) {
       events.push({ date: i.date, label: 'دفعة عند البيع — فاتورة ' + i.number, amount: -paidAtCreation });
     }
   });
-  const salePayments = payments.filter((p) => p.invoiceType === 'sale');
+  const salePayments = payments.filter((p) => p.invoiceType === 'sale' && (p.currency === 'USD' ? 'USD' : 'IQD') === cur);
   const batched = {};
   const single = [];
   salePayments.forEach((p) => {
@@ -500,7 +628,7 @@ function buildCustomerLedger(customer, sales, payments) {
     }
   });
   single.forEach((p) => events.push({ date: p.date, label: 'تسديد — فاتورة ' + p.invoiceNumber, amount: -p.amount }));
-  Object.values(batched).forEach((b) => events.push({ date: b.date, label: 'تسديد', amount: -b.amount }));
+  Object.values(batched).forEach((b) => events.push({ date: b.date, label: 'تسديد (مجمّع)', amount: -b.amount }));
   events.sort((a, b) => new Date(a.date) - new Date(b.date));
   let running = 0;
   return events.map((e) => {
@@ -509,8 +637,8 @@ function buildCustomerLedger(customer, sales, payments) {
   });
 }
 
-function customerLedgerTable(events) {
-  if (events.length === 0) return emptyState('لا توجد حركات بعد', 'أضف فاتورة بيع لهذا العميل ليبدأ ظهور الحركات هنا.');
+function customerLedgerTable(events, currency) {
+  if (events.length === 0) return emptyState('لا توجد حركات بعد', 'لا توجد حركات بهذه العملة لهذا العميل بعد.');
   const wrap = el('div', { class: 'table-wrap' });
   const table = el('table', {}, [el('thead', {}, [el('tr', {}, [
     el('th', {}, ['التاريخ']), el('th', {}, ['البيان']), el('th', {}, ['المبلغ']), el('th', {}, ['الإجمالي']),
@@ -520,8 +648,8 @@ function customerLedgerTable(events) {
     tbody.appendChild(el('tr', {}, [
       el('td', {}, [formatDate(e.date, true)]),
       el('td', {}, [e.label]),
-      el('td', { class: 'num' }, [el('span', { class: e.amount >= 0 ? 'amt-us' : 'amt-them' }, [formatMoney(Math.abs(e.amount))])]),
-      el('td', { class: 'num' }, [Math.abs(e.balance) > 0.001 ? el('span', { class: e.balance >= 0 ? 'amt-us' : 'amt-them' }, [formatMoney(Math.abs(e.balance))]) : formatMoney(0)]),
+      el('td', { class: 'num' }, [el('span', { class: e.amount >= 0 ? 'amt-us' : 'amt-them' }, [formatMoney(Math.abs(e.amount), currency)])]),
+      el('td', { class: 'num' }, [Math.abs(e.balance) > 0.001 ? el('span', { class: e.balance >= 0 ? 'amt-us' : 'amt-them' }, [formatMoney(Math.abs(e.balance), currency)]) : formatMoney(0, currency)]),
     ]));
   });
   table.appendChild(tbody);
@@ -533,15 +661,17 @@ function paymentsHistoryTable(list) {
   if (list.length === 0) return emptyState('لا توجد تسديدات بعد', '');
   const wrap = el('div', { class: 'table-wrap' });
   const table = el('table', {}, [el('thead', {}, [el('tr', {}, [
-    el('th', {}, ['التاريخ']), el('th', {}, ['نوع الفاتورة']), el('th', {}, ['رقم الفاتورة']), el('th', {}, ['المبلغ المسدد']), el('th', {}, ['ملاحظات']),
+    el('th', {}, ['التاريخ']), el('th', {}, ['نوع الفاتورة']), el('th', {}, ['رقم الفاتورة']), el('th', {}, ['المبلغ المسدد']), el('th', {}, ['العملة']), el('th', {}, ['ملاحظات']),
   ])])]);
   const tbody = el('tbody');
   list.forEach((p) => {
+    const cur = p.currency === 'USD' ? 'USD' : 'IQD';
     tbody.appendChild(el('tr', {}, [
       el('td', {}, [formatDate(p.date, true)]),
       el('td', {}, [p.invoiceType === 'sale' ? 'بيع (وارد منّا)' : 'شراء (صادر لنا)']),
       el('td', {}, [p.invoiceNumber]),
-      el('td', { class: 'num' }, [formatMoney(p.amount)]),
+      el('td', { class: 'num' }, [formatMoney(p.amount, cur)]),
+      el('td', {}, [cur === 'USD' ? 'دولار $' : ((STATE.settings && STATE.settings.currency) || 'دينار')]),
       el('td', {}, [p.notes || '—']),
     ]));
   });
@@ -559,13 +689,14 @@ function miniInvoiceTable(list, type, onPaid) {
   const tbody = el('tbody');
   const remClass = type === 'sale' ? 'amt-us' : 'amt-them';
   list.forEach((i) => {
+    const cur = i.currency === 'USD' ? 'USD' : 'IQD';
     const remaining = i.total - i.paidAmount;
     const actions = [['🖨 طباعة', () => printInvoice(type, i.id)]];
     if (remaining > 0.001) actions.push(['تسديد', () => openPaymentForm(type, i, onPaid)]);
     tbody.appendChild(el('tr', {}, [
-      el('td', {}, [i.number]), el('td', {}, [formatDate(i.date, true)]),
-      el('td', { class: 'num' }, [formatMoney(i.total)]),
-      el('td', { class: 'num' }, [remaining > 0.001 ? el('span', { class: remClass }, [formatMoney(remaining)]) : 'مسددة']),
+      el('td', {}, [i.number + (cur === 'USD' ? ' $' : '')]), el('td', {}, [formatDate(i.date, true)]),
+      el('td', { class: 'num' }, [formatMoney(i.total, cur)]),
+      el('td', { class: 'num' }, [remaining > 0.001 ? el('span', { class: remClass }, [formatMoney(remaining, cur)]) : 'مسددة']),
       el('td', {}, [rowActions(actions)]),
     ]));
   });
@@ -626,6 +757,7 @@ async function renderInvoices(area, type) {
     return el('span', { class: 'badge badge-unpaid' }, ['غير مسددة']);
   }
 
+  let invoicesPage = 1;
   function draw() {
     const custId = custFilter.value;
     const st = statusFilter.value;
@@ -635,13 +767,17 @@ async function renderInvoices(area, type) {
       wrap.appendChild(emptyState('لا توجد فواتير', 'اضغط على "' + addLabel + '" لإنشاء أول فاتورة.'));
       return;
     }
+    const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+    if (invoicesPage > totalPages) invoicesPage = totalPages;
+    const pageList = list.slice((invoicesPage - 1) * PAGE_SIZE, invoicesPage * PAGE_SIZE);
     const table = el('table', {}, [el('thead', {}, [el('tr', {}, [
-      el('th', {}, ['رقم الفاتورة']), el('th', {}, ['العميل']), el('th', {}, ['التاريخ']),
+      el('th', {}, ['رقم الفاتورة']), el('th', {}, ['العميل']), el('th', {}, ['التاريخ']), el('th', {}, ['العملة']),
       el('th', {}, ['الإجمالي']), el('th', {}, ['المتبقي']), el('th', {}, ['الحالة']), el('th', {}, ['إجراءات']),
     ])])]);
     const tbody = el('tbody');
-    list.forEach((inv) => {
+    pageList.forEach((inv) => {
       const s = statusOf(inv);
+      const cur = inv.currency === 'USD' ? 'USD' : 'IQD';
       const actions = [
         ['🖨 طباعة', () => printInvoice(type, inv.id)],
         ['تعديل', () => openInvoiceForm(type, inv)],
@@ -652,10 +788,11 @@ async function renderInvoices(area, type) {
         el('td', {}, [inv.number]),
         el('td', {}, [customerName(inv.customerId)]),
         el('td', {}, [formatDate(inv.date, true)]),
-        el('td', { class: 'num' }, [formatMoney(inv.total)]),
+        el('td', {}, [cur === 'USD' ? el('span', { class: 'badge-usd' }, [' $']) : '—']),
+        el('td', { class: 'num' }, [formatMoney(inv.total, cur)]),
         el('td', { class: 'num' }, [(() => {
           const remaining = inv.total - inv.paidAmount;
-          return remaining > 0.001 ? el('span', { class: type === 'sale' ? 'amt-us' : 'amt-them' }, [formatMoney(remaining)]) : formatMoney(0);
+          return remaining > 0.001 ? el('span', { class: type === 'sale' ? 'amt-us' : 'amt-them' }, [formatMoney(remaining, cur)]) : formatMoney(0, cur);
         })()]),
         el('td', {}, [statusBadge(s)]),
         el('td', {}, [rowActions(actions)]),
@@ -663,9 +800,11 @@ async function renderInvoices(area, type) {
     });
     table.appendChild(tbody);
     wrap.appendChild(table);
+    const pager = buildPager(invoicesPage, totalPages, (p) => { invoicesPage = p; draw(); });
+    if (pager) wrap.appendChild(pager);
   }
-  custFilter.addEventListener('change', draw);
-  statusFilter.addEventListener('change', draw);
+  custFilter.addEventListener('change', () => { invoicesPage = 1; draw(); });
+  statusFilter.addEventListener('change', () => { invoicesPage = 1; draw(); });
   draw();
 }
 
@@ -689,6 +828,19 @@ function openInvoiceForm(type, existing, presetCustomerId, onDone) {
 
   const dateInput = el('input', { class: 'input', type: 'date', 'data-field': 'date', value: existing ? existing.date.slice(0, 10) : todayInputValue() });
   grid.appendChild(el('div', { class: 'field' }, [el('label', {}, ['التاريخ']), dateInput]));
+
+  // عملة الفاتورة: حساب دينار وحساب دولار مستقلان تماماً، لا تحويل بينهما إطلاقاً
+  const currencySelect = el('select', { class: 'input' }, [
+    el('option', { value: 'IQD' }, ['دينار (' + ((STATE.settings && STATE.settings.currency) || 'دينار') + ')']),
+    el('option', { value: 'USD' }, ['دولار أمريكي ($)']),
+  ]);
+  const existingCust = existing ? customers.find((c) => c.id === existing.customerId) : customers.find((c) => c.id === presetCustomerId);
+  const initialCurrency = existing ? (existing.currency || 'IQD') : ((existingCust && existingCust.dealsInUsd) ? 'USD' : 'IQD');
+  currencySelect.value = initialCurrency;
+  if (isEdit) currencySelect.disabled = true; // تفادي تضارب الدفعات المسجّلة بعملة الفاتورة الأصلية
+  const currencyField = el('div', { class: 'field' }, [el('label', {}, ['عملة الفاتورة']), currencySelect]);
+  grid.appendChild(currencyField);
+  if (isEdit) grid.appendChild(el('div', { class: 'field-hint field-full' }, ['لا يمكن تغيير عملة الفاتورة بعد إنشائها.']));
   body.appendChild(grid);
 
   const amountLabel = type === 'sale' ? 'المبلغ (الأساسي)' : 'المبلغ (مطلوب)';
@@ -700,8 +852,9 @@ function openInvoiceForm(type, existing, presetCustomerId, onDone) {
 
   function recalcTotals() {
     const total = Math.max(0, numVal(amountInput) - numVal(discountInput));
-    const d = currencyDecimals((STATE.settings && STATE.settings.currency) || '');
-    grandTotalLine.textContent = 'الإجمالي: ' + total.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+    const cur = currencySelect.value === 'USD' ? 'USD' : 'IQD';
+    const d = decimalsForCurrency(cur);
+    grandTotalLine.textContent = 'الإجمالي: ' + total.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }) + ' ' + currencyLabel(cur);
     if (numVal(paidInput) > total) paidInput.value = formatMoneyInputStr(total.toFixed(2));
   }
 
@@ -716,6 +869,7 @@ function openInvoiceForm(type, existing, presetCustomerId, onDone) {
 
   amountInput.addEventListener('input', recalcTotals);
   discountInput.addEventListener('input', recalcTotals);
+  currencySelect.addEventListener('change', recalcTotals);
   recalcTotals();
 
   const footer = [
@@ -724,7 +878,8 @@ function openInvoiceForm(type, existing, presetCustomerId, onDone) {
       if (amount <= 0) { toast('أدخل مبلغاً أكبر من صفر', true); return; }
       const data = {
         customerId: custSelect.value,
-        date: dateInput.value ? new Date(dateInput.value).toISOString() : new Date().toISOString(),
+        date: dateInputToISO(dateInput.value),
+        currency: currencySelect.value === 'USD' ? 'USD' : 'IQD',
         amount,
         discount: numVal(discountInput),
         paidAmount: numVal(paidInput),
@@ -750,26 +905,35 @@ function openInvoiceForm(type, existing, presetCustomerId, onDone) {
   );
 }
 
-function openPaymentForm(type, invoice, onDone) {
+async function getCustomerCached(id) {
+  let c = STATE.customersCache.find((x) => x.id === id);
+  if (c) return c;
+  c = await window.api.customers.get(id);
+  if (c) STATE.customersCache.push(c);
+  return c;
+}
+
+async function openPaymentForm(type, invoice, onDone) {
   const remaining = invoice.total - invoice.paidAmount;
-  const amountInput = moneyInput({ class: 'input', placeholder: 'أدخل المبلغ المدفوع' });
+  const cur = invoice.currency === 'USD' ? 'USD' : 'IQD';
+  const amountBlock = buildPaymentAmountBlock('المبلغ المدفوع الآن', undefined, cur);
   const dateInput = el('input', { class: 'input', type: 'date', value: todayInputValue() });
   const notesInput = el('textarea', { class: 'input', rows: 2 });
   const body = el('div', { class: 'form-grid' }, [
-    el('div', { class: 'field' }, [el('label', {}, ['المتبقي الحالي']), el('div', {}, [formatMoney(remaining)])]),
-    el('div', { class: 'field' }, [el('label', {}, ['المبلغ المدفوع الآن']), amountInput]),
+    el('div', { class: 'field' }, [el('label', {}, ['المتبقي الحالي']), el('div', {}, [formatMoney(remaining, cur)])]),
+    ...amountBlock.nodes,
     el('div', { class: 'field' }, [el('label', {}, ['تاريخ الدفعة']), dateInput]),
     el('div', { class: 'field field-full' }, [el('label', {}, ['ملاحظات']), notesInput]),
   ]);
   const footer = [
     el('button', { class: 'btn btn-primary', onclick: async () => {
-      const amount = numVal(amountInput);
-      if (amount <= 0) { toast('أدخل مبلغاً صحيحاً', true); return; }
+      const result = amountBlock.getResult();
+      if (!result) { toast('أدخل مبلغاً صحيحاً', true); return; }
       const res = await window.api.payments.add({
         invoiceId: invoice.id,
         invoiceType: type,
-        amount,
-        date: dateInput.value ? new Date(dateInput.value).toISOString() : new Date().toISOString(),
+        amount: result.amount,
+        date: dateInputToISO(dateInput.value),
         notes: notesInput.value,
       });
       if (!res.ok) { toast('تعذر تسجيل الدفعة', true); return; }
@@ -791,35 +955,46 @@ async function renderDues(area) {
   const custById = {};
   customers.forEach((c) => { custById[c.id] = c; });
 
-  const owed = dues
-    .filter((d) => d.theyOweUs > 0.001)
-    .sort((a, b) => b.theyOweUs - a.theyOweUs);
+  const owedIqd = dues.filter((d) => d.theyOweUs > 0.001).sort((a, b) => b.theyOweUs - a.theyOweUs);
+  const owedUsd = dues.filter((d) => d.theyOweUsUsd > 0.001).sort((a, b) => b.theyOweUsUsd - a.theyOweUsUsd);
 
-  if (owed.length === 0) {
+  if (owedIqd.length === 0 && owedUsd.length === 0) {
     area.appendChild(emptyState('لا توجد مبالغ مستحقة على العملاء', 'جميع العملاء مسددون بالكامل.'));
     return;
   }
-  const wrap = el('div', { class: 'table-wrap' });
-  const table = el('table', {}, [el('thead', {}, [el('tr', {}, [
-    el('th', {}, ['العميل']), el('th', {}, ['الهاتف']), el('th', {}, ['المبلغ المستحق']), el('th', {}, ['إجراءات']),
-  ])])]);
-  const tbody = el('tbody');
-  owed.forEach((d) => {
-    const cust = custById[d.customerId];
-    tbody.appendChild(el('tr', {}, [
-      el('td', {}, [d.customerName]),
-      el('td', {}, [(cust && cust.phone) || '—']),
-      el('td', { class: 'num' }, [el('span', { class: 'amt-us' }, [formatMoney(d.theyOweUs)])]),
-      el('td', {}, [rowActions([
-        ['تسديد', () => quickSettleForCustomer(d.customerId, () => navigate('dues'))],
-        ['عرض الملف', () => openCustomerProfile(d.customerId)],
-        ['كشف حساب', () => printCustomerStatement(d.customerId)],
-      ])]),
-    ]));
-  });
-  table.appendChild(tbody);
-  wrap.appendChild(table);
-  area.appendChild(wrap);
+
+  function duesTable(list, amountKey, currency) {
+    const wrap = el('div', { class: 'table-wrap' });
+    const table = el('table', {}, [el('thead', {}, [el('tr', {}, [
+      el('th', {}, ['العميل']), el('th', {}, ['الهاتف']), el('th', {}, ['المبلغ المستحق']), el('th', {}, ['إجراءات']),
+    ])])]);
+    const tbody = el('tbody');
+    list.forEach((d) => {
+      const cust = custById[d.customerId];
+      tbody.appendChild(el('tr', {}, [
+        el('td', {}, [d.customerName]),
+        el('td', {}, [(cust && cust.phone) || '—']),
+        el('td', { class: 'num' }, [el('span', { class: 'amt-us' }, [formatMoney(d[amountKey], currency)])]),
+        el('td', {}, [rowActions([
+          ['تسديد', () => quickSettleForCustomer(d.customerId, () => navigate('dues'))],
+          ['عرض الملف', () => openCustomerProfile(d.customerId)],
+          ['كشف حساب', () => printCustomerStatement(d.customerId)],
+        ])]),
+      ]));
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    return wrap;
+  }
+
+  if (owedIqd.length) {
+    area.appendChild(el('div', { class: 'section-title' }, ['مستحق بالدينار']));
+    area.appendChild(duesTable(owedIqd, 'theyOweUs', 'IQD'));
+  }
+  if (owedUsd.length) {
+    area.appendChild(el('div', { class: 'section-title' }, ['مستحق بالدولار']));
+    area.appendChild(duesTable(owedUsd, 'theyOweUsUsd', 'USD'));
+  }
 }
 
 // ---------------- السجل والتاريخ ----------------
@@ -866,27 +1041,33 @@ async function renderHistory(area) {
       return true;
     });
   }
+  let historyPage = 1;
   function draw() {
     const list = filtered();
     wrap.innerHTML = '';
     if (list.length === 0) { wrap.appendChild(emptyState('لا توجد نتائج', 'جرّب تغيير عوامل التصفية.')); return; }
+    const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+    if (historyPage > totalPages) historyPage = totalPages;
+    const pageList = list.slice((historyPage - 1) * PAGE_SIZE, historyPage * PAGE_SIZE);
     const table = el('table', {}, [el('thead', {}, [el('tr', {}, [
       el('th', {}, ['التاريخ']), el('th', {}, ['العميل']), el('th', {}, ['نوع الحركة']), el('th', {}, ['التفاصيل']), el('th', {}, ['المبلغ']),
     ])])]);
     const tbody = el('tbody');
-    list.forEach((h) => {
+    pageList.forEach((h) => {
       tbody.appendChild(el('tr', {}, [
         el('td', {}, [formatDate(h.date, true)]),
         el('td', {}, [customerName(h.customerId)]),
         el('td', {}, [KIND_LABEL[h.kind] || h.kind]),
         el('td', {}, [h.label]),
-        el('td', { class: 'num' }, [formatMoney(h.amount)]),
+        el('td', { class: 'num' }, [formatMoney(h.amount, h.currency)]),
       ]));
     });
     table.appendChild(tbody);
     wrap.appendChild(table);
+    const pager = buildPager(historyPage, totalPages, (p) => { historyPage = p; draw(); });
+    if (pager) wrap.appendChild(pager);
   }
-  [kindFilter, custFilter, fromInput, toInput].forEach((i) => i.addEventListener('input', draw));
+  [kindFilter, custFilter, fromInput, toInput].forEach((i) => i.addEventListener('input', () => { historyPage = 1; draw(); }));
   draw();
 
   printReportBtn.addEventListener('click', () => printHistoryReport(filtered()));
@@ -900,22 +1081,29 @@ function openBackupInspectModal(res) {
   const purchases = Array.isArray(data.purchaseInvoices) ? data.purchaseInvoices : [];
   const payments = Array.isArray(data.payments) ? data.payments : [];
   const cur = (data.settings && data.settings.currency) || (STATE.settings && STATE.settings.currency) || '';
-  const money = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: currencyDecimals(cur), maximumFractionDigits: currencyDecimals(cur) }) + ' ' + cur;
+  const money = (n, isUsd) => (isUsd
+    ? '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: (cur === 'د.ع' ? 0 : 2), maximumFractionDigits: (cur === 'د.ع' ? 0 : 2) }) + ' ' + cur);
 
-  const totalSales = sales.reduce((s, i) => s + (Number(i.total) || 0), 0);
-  const totalPurchases = purchases.reduce((s, i) => s + (Number(i.total) || 0), 0);
-  const dueSales = sales.reduce((s, i) => s + Math.max((Number(i.total) || 0) - (Number(i.paidAmount) || 0), 0), 0);
-  const duePurchases = purchases.reduce((s, i) => s + Math.max((Number(i.total) || 0) - (Number(i.paidAmount) || 0), 0), 0);
+  const inUsd = (i) => i.currency === 'USD';
+  const totalSales = sales.filter((i) => !inUsd(i)).reduce((s, i) => s + (Number(i.total) || 0), 0);
+  const totalSalesUsd = sales.filter(inUsd).reduce((s, i) => s + (Number(i.total) || 0), 0);
+  const totalPurchases = purchases.filter((i) => !inUsd(i)).reduce((s, i) => s + (Number(i.total) || 0), 0);
+  const totalPurchasesUsd = purchases.filter(inUsd).reduce((s, i) => s + (Number(i.total) || 0), 0);
+  const dueSales = sales.filter((i) => !inUsd(i)).reduce((s, i) => s + Math.max((Number(i.total) || 0) - (Number(i.paidAmount) || 0), 0), 0);
+  const dueSalesUsd = sales.filter(inUsd).reduce((s, i) => s + Math.max((Number(i.total) || 0) - (Number(i.paidAmount) || 0), 0), 0);
+  const duePurchases = purchases.filter((i) => !inUsd(i)).reduce((s, i) => s + Math.max((Number(i.total) || 0) - (Number(i.paidAmount) || 0), 0), 0);
+  const duePurchasesUsd = purchases.filter(inUsd).reduce((s, i) => s + Math.max((Number(i.total) || 0) - (Number(i.paidAmount) || 0), 0), 0);
 
   const rows = [
     ['اسم الشركة داخل الملف', (data.settings && data.settings.companyName) || '—'],
     ['تاريخ الملف', res.fileDate ? formatDate(res.fileDate, true) : '—'],
     ['عدد العملاء', String(customers.length)],
-    ['عدد فواتير البيع', String(sales.length) + ' — إجمالي ' + money(totalSales)],
-    ['عدد فواتير الشراء', String(purchases.length) + ' — إجمالي ' + money(totalPurchases)],
+    ['عدد فواتير البيع', String(sales.length) + ' — إجمالي ' + money(totalSales) + ' + ' + money(totalSalesUsd, true)],
+    ['عدد فواتير الشراء', String(purchases.length) + ' — إجمالي ' + money(totalPurchases) + ' + ' + money(totalPurchasesUsd, true)],
     ['عدد الدفعات المسجّلة', String(payments.length)],
-    ['الباقي (غير مسدد)', money(dueSales)],
-    ['المستحق علينا (غير مسدد)', money(duePurchases)],
+    ['الباقي (غير مسدد)', money(dueSales) + ' + ' + money(dueSalesUsd, true)],
+    ['المستحق علينا (غير مسدد)', money(duePurchases) + ' + ' + money(duePurchasesUsd, true)],
   ];
 
   const body = el('div', {}, [
@@ -932,6 +1120,7 @@ function openBackupInspectModal(res) {
       toast('تم استيراد النسخة الاحتياطية بنجاح');
       STATE.settings = restoreRes.settings;
       qs('#brandCompanyName').textContent = STATE.settings.companyName || 'دفتر الفواتير';
+      applyBrandLogo();
       navigate('dashboard');
     }}, ['تأكيد الاستعادة الآن']),
     el('button', { class: 'btn btn-ghost', onclick: closeModal }, ['إلغاء']),
@@ -951,21 +1140,62 @@ async function renderSettings(area) {
     fieldFull('companyAddress', 'عنوان المنشأة', settings.companyAddress),
   ]);
 
+  // ---- شعار المنشأة ----
+  let pendingLogo = settings.companyLogo || '';
+  const logoPreview = el('div', { class: 'logo-preview' }, [
+    pendingLogo
+      ? el('img', { src: pendingLogo, alt: 'شعار المنشأة' })
+      : el('div', { class: 'logo-placeholder' }, ['لا يوجد شعار']),
+  ]);
+  const logoFileInput = el('input', {
+    type: 'file',
+    accept: 'image/png,image/jpeg,image/svg+xml,image/webp',
+    style: 'display:none',
+    onchange: (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      if (file.size > 1024 * 1024) {
+        toast('حجم الصورة كبير جداً، يفضل أقل من 1 ميجابايت', true);
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        pendingLogo = String(reader.result || '');
+        logoPreview.innerHTML = '';
+        logoPreview.appendChild(el('img', { src: pendingLogo, alt: 'شعار المنشأة' }));
+      };
+      reader.readAsDataURL(file);
+    },
+  });
+  const logoButtons = el('div', { class: 'toolbar' }, [
+    el('button', { class: 'btn btn-ghost', type: 'button', onclick: () => logoFileInput.click() }, ['⭱ اختيار صورة الشعار']),
+    el('button', { class: 'btn btn-ghost', type: 'button', onclick: () => {
+      pendingLogo = '';
+      logoPreview.innerHTML = '';
+      logoPreview.appendChild(el('div', { class: 'logo-placeholder' }, ['لا يوجد شعار']));
+    }}, ['✕ إزالة الشعار']),
+  ]);
   const currencySelect = el('select', { class: 'input', 'data-field': 'currency' }, [
     'د.ع', 'دينار', 'ريال', 'دولار', 'جنيه', 'درهم'
   ].map((c) => el('option', { value: c, selected: settings.currency === c ? 'selected' : undefined }, [c === 'د.ع' ? 'دينار عراقي (د.ع)' : c])));
   body.appendChild(el('div', { class: 'field' }, [el('label', {}, ['العملة']), currencySelect]));
 
   area.appendChild(body);
+  area.appendChild(el('div', { class: 'field-hint' }, ['حساب الدولار مستقل تماماً عن حساب الدينار لكل عميل — بدون أي تحويل أو سعر صرف بينهما.']));
+
+  area.appendChild(el('div', { class: 'section-title' }, ['شعار المنشأة']));
+  area.appendChild(el('div', { class: 'logo-upload-row' }, [logoPreview, logoButtons, logoFileInput]));
+  area.appendChild(el('div', { class: 'field-hint' }, ['يظهر الشعار في الشريط الجانبي وأعلى فواتير الطباعة. يفضّل صورة مربعة بخلفية شفافة أو بيضاء.']));
 
   area.appendChild(el('div', { class: 'section-title' }, ['حفظ ونسخ احتياطي']));
   const actions = el('div', { class: 'toolbar' });
   actions.appendChild(el('button', { class: 'btn btn-primary', onclick: async () => {
     const data = readFields(body, ['companyName', 'companyPhone', 'companyAddress']);
     data.currency = currencySelect.value;
+    data.companyLogo = pendingLogo;
     STATE.settings = await window.api.settings.update(data);
     toast('تم حفظ الإعدادات');
     qs('#brandCompanyName').textContent = STATE.settings.companyName || 'دفتر الفواتير';
+    applyBrandLogo();
   }}, ['حفظ الإعدادات']));
   actions.appendChild(el('button', { class: 'btn btn-ghost', onclick: async () => {
     const res = await window.api.backup.export();
@@ -1021,6 +1251,105 @@ async function renderSettings(area) {
   area.appendChild(el('div', { class: 'section-title' }, ['معلومات الترقيم']));
   area.appendChild(el('div', {}, [
     'آخر رقم فاتورة بيع: ' + settings.saleInvoiceCounter + ' — آخر رقم فاتورة شراء: ' + settings.purchaseInvoiceCounter,
+  ]));
+
+  // ---- الترخيص ----
+  area.appendChild(el('div', { class: 'section-title' }, ['الترخيص']));
+  const licenseStatus = await window.api.license.getStatus();
+  const licenseLine = licenseStatus.ok
+    ? (licenseStatus.permanent
+        ? 'الحالة: مفعّل بشكل دائم'
+        : 'الحالة: مفعّل حتى ' + new Date(licenseStatus.expiryDate).toLocaleDateString('ar'))
+    : 'الحالة: غير مفعّل';
+  area.appendChild(el('div', {}, [licenseLine + ' — رمز هذا الحاسوب: ' + licenseStatus.deviceId]));
+
+  const licenseActions = el('div', { class: 'toolbar', style: 'margin-top:8px' });
+  licenseActions.appendChild(el('button', { class: 'btn btn-ghost', onclick: () => openLicenseModal() }, ['🔑 تفعيل / تحديث المفتاح']));
+  if (licenseStatus.ok) {
+    licenseActions.appendChild(el('button', { class: 'btn btn-danger', onclick: async () => {
+      const sure = await confirmModal('هل تريد إلغاء تفعيل البرنامج على هذا الحاسوب؟');
+      if (!sure) return;
+      await window.api.license.deactivate();
+      toast('تم إلغاء التفعيل');
+      navigate('settings');
+    }}, ['إلغاء التفعيل']));
+  }
+  area.appendChild(licenseActions);
+}
+
+// نافذة تفعيل/تحديث مفتاح الترخيص، تُستخدم أيضاً لتجديد الترخيص قبل انتهائه
+async function openLicenseModal() {
+  const status = await window.api.license.getStatus();
+  const deviceInput = el('input', { class: 'input', readonly: true, value: status.deviceId, style: 'text-align:center;font-weight:700' });
+  const keyInput = el('input', { class: 'input', placeholder: 'XXXX-XXXX-XXXX-XXXX-XXXX-XXXX', style: 'text-align:center;font-weight:700;text-transform:uppercase;margin-top:10px' });
+  const msg = el('div', { class: 'field-hint', style: 'margin-top:8px' }, ['']);
+
+  const body = el('div', {}, [
+    el('div', { class: 'field' }, [el('label', {}, ['رمز هذا الحاسوب']), deviceInput]),
+    el('div', { class: 'field', style: 'margin-top:10px' }, [el('label', {}, ['مفتاح التفعيل']), keyInput]),
+    msg,
+  ]);
+
+  const footer = [
+    el('button', { class: 'btn btn-primary', onclick: async () => {
+      const result = await window.api.license.activate(keyInput.value.trim());
+      if (result.ok) {
+        toast('تم التفعيل بنجاح');
+        closeModal();
+        navigate('settings');
+      } else {
+        const map = {
+          format: 'صيغة المفتاح غير صحيحة',
+          invalid: 'المفتاح غير صحيح',
+          device_mismatch: 'هذا المفتاح غير مخصّص لهذا الحاسوب',
+          expired: 'هذا المفتاح منتهي الصلاحية',
+        };
+        msg.textContent = map[result.reason] || 'تعذّر التفعيل';
+      }
+    }}, ['تفعيل']),
+    el('button', { class: 'btn btn-ghost', onclick: () => closeModal() }, ['إغلاق']),
+  ];
+  openModal('تفعيل / تحديث الترخيص', body, footer);
+}
+
+// ---------------- عن البرنامج ----------------
+async function renderAbout(area) {
+  area.innerHTML = '';
+
+  const card = el('div', { class: 'about-card' }, [
+    el('div', { class: 'about-app-mark' }, ['ف']),
+    el('div', { class: 'about-app-name' }, ['دفتر الفواتير']),
+    el('div', { class: 'about-app-desc' }, ['برنامج سطح مكتب عربي لإدارة العملاء والفواتير والمستحقات']),
+  ]);
+  area.appendChild(card);
+
+  area.appendChild(el('div', { class: 'section-title' }, ['معلومات المطوّر']));
+  const infoRows = [
+    ['المطوّر', 'المهندس إبراهيم مؤيد عطارباشي'],
+    ['الموقع', 'الموصل — المجموعة الثقافية — شركة المسار الذهبي'],
+    ['رقم الهاتف', '+9647736970504'],
+  ];
+  const infoList = el('div', { class: 'about-info-list' }, infoRows.map(([label, value]) => (
+    el('div', { class: 'about-info-row' }, [
+      el('span', { class: 'about-info-label' }, [label]),
+      el('span', { class: 'about-info-value' }, [value]),
+    ])
+  )));
+  area.appendChild(infoList);
+
+  const contactActions = el('div', { class: 'toolbar', style: 'margin-top:14px;max-width:420px;margin-inline:auto;justify-content:center' });
+  contactActions.appendChild(el('button', {
+    class: 'btn btn-primary',
+    onclick: () => { window.api.system.openExternal('tel:+9647736970504'); },
+  }, ['📞 اتصال']));
+  contactActions.appendChild(el('button', {
+    class: 'btn btn-ghost',
+    onclick: () => { window.api.system.openExternal('https://wa.me/9647736970504'); },
+  }, ['💬 واتساب']));
+  area.appendChild(contactActions);
+
+  area.appendChild(el('div', { class: 'field-hint', style: 'margin-top:16px;text-align:center' }, [
+    'جميع الحقوق محفوظة © ' + new Date().getFullYear(),
   ]));
 }
 
@@ -1097,11 +1426,15 @@ qs('#ppPdfBtn').addEventListener('click', async () => {
 
 function docHeaderHtml(docTypeLabel, metaLines) {
   const s = STATE.settings || {};
+  const logoImg = s.companyLogo ? '<img class="doc-header-logo" src="' + s.companyLogo + '" alt="شعار" />' : '';
   return (
     '<div class="doc-header">' +
-      '<div>' +
-        '<h2>' + esc(s.companyName || 'المنشأة') + '</h2>' +
-        '<div class="doc-meta">' + esc(s.companyPhone || '') + (s.companyPhone && s.companyAddress ? ' — ' : '') + esc(s.companyAddress || '') + '</div>' +
+      '<div class="doc-header-brand">' +
+        logoImg +
+        '<div>' +
+          '<h2>' + esc(s.companyName || 'المنشأة') + '</h2>' +
+          '<div class="doc-meta">' + esc(s.companyPhone || '') + (s.companyPhone && s.companyAddress ? ' — ' : '') + esc(s.companyAddress || '') + '</div>' +
+        '</div>' +
       '</div>' +
       '<div class="doc-type">' + docTypeLabel + metaLines + '</div>' +
     '</div>'
@@ -1114,7 +1447,8 @@ async function printInvoice(type, id) {
     (async () => { const list = await window.api.customers.list(); STATE.customersCache = list; return list; })(),
   ]);
   const cust = STATE.customersCache.find((c) => c.id === inv.customerId);
-  const label = type === 'sale' ? 'فاتورة بيع' : 'فاتورة شراء';
+  const cur = inv.currency === 'USD' ? 'USD' : 'IQD';
+  const label = (type === 'sale' ? 'فاتورة بيع' : 'فاتورة شراء') + (cur === 'USD' ? ' (دولار)' : '');
   const meta = '<div class="doc-meta">رقم: ' + esc(inv.number) + '<br/>التاريخ: ' + formatDate(inv.date, true) + '</div>';
 
   const amountLabel = type === 'sale' ? 'المبلغ (الأساسي)' : 'المبلغ (مطلوب)';
@@ -1124,11 +1458,11 @@ async function printInvoice(type, id) {
     '<div class="doc-section-title">بيانات ' + (type === 'sale' ? 'العميل' : 'المورّد') + '</div>' +
     '<div>' + esc(cust ? cust.name : '') + (cust && cust.phone ? ' — ' + esc(cust.phone) : '') + '</div>' +
     '<div class="doc-totals">' +
-      '<div><span>' + amountLabel + '</span><span>' + formatMoney(inv.amount) + '</span></div>' +
-      '<div><span>الخصم</span><span>' + formatMoney(inv.discount) + '</span></div>' +
-      '<div class="grand"><span>الإجمالي</span><span>' + formatMoney(inv.total) + '</span></div>' +
-      '<div><span>المدفوع</span><span>' + formatMoney(inv.paidAmount) + '</span></div>' +
-      '<div><span>المتبقي</span><span>' + formatMoney(inv.total - inv.paidAmount) + '</span></div>' +
+      '<div><span>' + amountLabel + '</span><span>' + formatMoney(inv.amount, cur) + '</span></div>' +
+      '<div><span>الخصم</span><span>' + formatMoney(inv.discount, cur) + '</span></div>' +
+      '<div class="grand"><span>الإجمالي</span><span>' + formatMoney(inv.total, cur) + '</span></div>' +
+      '<div><span>المدفوع</span><span>' + formatMoney(inv.paidAmount, cur) + '</span></div>' +
+      '<div><span>المتبقي</span><span>' + formatMoney(inv.total - inv.paidAmount, cur) + '</span></div>' +
     '</div>' +
     (inv.notes ? '<div class="doc-section-title">ملاحظات</div><div>' + esc(inv.notes) + '</div>' : '') +
     '<div class="doc-footer">تم إنشاء هذا المستند بواسطة دفتر الفواتير — ' + formatDate(new Date().toISOString(), true) + '</div>';
@@ -1147,63 +1481,79 @@ async function printCustomerStatement(customerId) {
   const myPurchases = purchases.filter((i) => i.customerId === customerId);
   const myPayments = payments.filter((p) => p.customerId === customerId);
 
-  const opening = Number(customer.openingBalance) || 0;
-  const events = [];
-  if (opening) {
-    events.push({
-      date: customer.createdAt || new Date(0).toISOString(),
-      label: 'حساب قديم',
-      debit: opening > 0 ? opening : 0,
-      credit: opening < 0 ? -opening : 0,
-    });
-  }
-  mySales.forEach((i) => {
-    events.push({ date: i.date, label: 'فاتورة بيع ' + i.number, debit: i.total, credit: 0 });
-    const paidViaPayments = myPayments.filter((p) => p.invoiceType === 'sale' && p.invoiceId === i.id).reduce((s, p) => s + (Number(p.amount) || 0), 0);
-    const paidAtCreation = Math.max(0, (Number(i.paidAmount) || 0) - paidViaPayments);
-    if (paidAtCreation > 0.001) events.push({ date: i.date, label: 'دفعة عند البيع — فاتورة ' + i.number, debit: 0, credit: paidAtCreation });
-  });
-  myPurchases.forEach((i) => {
-    events.push({ date: i.date, label: 'فاتورة شراء ' + i.number, debit: 0, credit: i.total });
-    const paidViaPayments = myPayments.filter((p) => p.invoiceType === 'purchase' && p.invoiceId === i.id).reduce((s, p) => s + (Number(p.amount) || 0), 0);
-    const paidAtCreation = Math.max(0, (Number(i.paidAmount) || 0) - paidViaPayments);
-    if (paidAtCreation > 0.001) events.push({ date: i.date, label: 'دفعة عند الشراء — فاتورة ' + i.number, debit: paidAtCreation, credit: 0 });
-  });
-  const batchedSale = {}, batchedPurchase = {};
-  const singlePayments = [];
-  myPayments.forEach((p) => {
-    if (p.batchId) {
-      const bucket = p.invoiceType === 'sale' ? batchedSale : batchedPurchase;
-      if (!bucket[p.batchId]) bucket[p.batchId] = { date: p.date, amount: 0 };
-      bucket[p.batchId].amount += Number(p.amount) || 0;
-    } else {
-      singlePayments.push(p);
-    }
-  });
-  singlePayments.forEach((p) => events.push({
-    date: p.date,
-    label: (p.invoiceType === 'sale' ? 'دفعة مستلمة — ' : 'دفعة مسددة — ') + p.invoiceNumber,
-    debit: p.invoiceType === 'purchase' ? p.amount : 0,
-    credit: p.invoiceType === 'sale' ? p.amount : 0,
-  }));
-  Object.values(batchedSale).forEach((b) => events.push({ date: b.date, label: 'دفعة مستلمة (تسديد مجمّع)', debit: 0, credit: b.amount }));
-  Object.values(batchedPurchase).forEach((b) => events.push({ date: b.date, label: 'دفعة مسددة (تسديد مجمّع)', debit: b.amount, credit: 0 }));
-  events.sort((a, b) => new Date(a.date) - new Date(b.date));
+  // يبني قسم كشف الحساب لعملة واحدة فقط (دينار أو دولار) — الحسابان مستقلان تماماً
+  function buildSection(currency) {
+    const cur = currency === 'USD' ? 'USD' : 'IQD';
+    const inCur = (x) => (x.currency === 'USD' ? 'USD' : 'IQD') === cur;
+    const sSales = mySales.filter(inCur);
+    const sPurchases = myPurchases.filter(inCur);
+    const sPayments = myPayments.filter(inCur);
+    const opening = cur === 'USD' ? (Number(customer.openingBalanceUsd) || 0) : (Number(customer.openingBalance) || 0);
 
-  let rows = '';
-  events.forEach((e) => {
-    rows += '<tr><td>' + formatDate(e.date, true) + '</td><td>' + esc(e.label) + '</td><td>' + (e.debit ? '<span class="amt-us">' + formatMoney(e.debit) + '</span>' : '—') + '</td><td>' + (e.credit ? '<span class="amt-them">' + formatMoney(e.credit) + '</span>' : '—') + '</td></tr>';
-  });
-  const theyOweUs = mySales.reduce((s, i) => s + (i.total - i.paidAmount), 0) + (opening > 0 ? opening : 0);
-  const weOweThem = myPurchases.reduce((s, i) => s + (i.total - i.paidAmount), 0) + (opening < 0 ? -opening : 0);
+    const events = [];
+    if (opening) {
+      events.push({
+        date: customer.createdAt || new Date(0).toISOString(),
+        label: 'حساب قديم',
+        debit: opening > 0 ? opening : 0,
+        credit: opening < 0 ? -opening : 0,
+      });
+    }
+    sSales.forEach((i) => {
+      events.push({ date: i.date, label: 'فاتورة بيع ' + i.number, debit: i.total, credit: 0 });
+      const paidViaPayments = sPayments.filter((p) => p.invoiceType === 'sale' && p.invoiceId === i.id).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+      const paidAtCreation = Math.max(0, (Number(i.paidAmount) || 0) - paidViaPayments);
+      if (paidAtCreation > 0.001) events.push({ date: i.date, label: 'دفعة عند البيع — فاتورة ' + i.number, debit: 0, credit: paidAtCreation });
+    });
+    sPurchases.forEach((i) => {
+      events.push({ date: i.date, label: 'فاتورة شراء ' + i.number, debit: 0, credit: i.total });
+      const paidViaPayments = sPayments.filter((p) => p.invoiceType === 'purchase' && p.invoiceId === i.id).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+      const paidAtCreation = Math.max(0, (Number(i.paidAmount) || 0) - paidViaPayments);
+      if (paidAtCreation > 0.001) events.push({ date: i.date, label: 'دفعة عند الشراء — فاتورة ' + i.number, debit: paidAtCreation, credit: 0 });
+    });
+    const batchedSale = {}, batchedPurchase = {};
+    const singlePayments = [];
+    sPayments.forEach((p) => {
+      if (p.batchId) {
+        const bucket = p.invoiceType === 'sale' ? batchedSale : batchedPurchase;
+        if (!bucket[p.batchId]) bucket[p.batchId] = { date: p.date, amount: 0 };
+        bucket[p.batchId].amount += Number(p.amount) || 0;
+      } else {
+        singlePayments.push(p);
+      }
+    });
+    singlePayments.forEach((p) => events.push({
+      date: p.date,
+      label: (p.invoiceType === 'sale' ? 'دفعة مستلمة — ' : 'دفعة مسددة — ') + p.invoiceNumber,
+      debit: p.invoiceType === 'purchase' ? p.amount : 0,
+      credit: p.invoiceType === 'sale' ? p.amount : 0,
+    }));
+    Object.values(batchedSale).forEach((b) => events.push({ date: b.date, label: 'دفعة مستلمة (تسديد مجمّع)', debit: 0, credit: b.amount }));
+    Object.values(batchedPurchase).forEach((b) => events.push({ date: b.date, label: 'دفعة مسددة (تسديد مجمّع)', debit: b.amount, credit: 0 }));
+    events.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    if (events.length === 0) return '';
+
+    let rows = '';
+    events.forEach((e) => {
+      rows += '<tr><td>' + formatDate(e.date, true) + '</td><td>' + esc(e.label) + '</td><td>' + (e.debit ? '<span class="amt-us">' + formatMoney(e.debit, cur) + '</span>' : '—') + '</td><td>' + (e.credit ? '<span class="amt-them">' + formatMoney(e.credit, cur) + '</span>' : '—') + '</td></tr>';
+    });
+    const theyOweUs = sSales.reduce((s, i) => s + (i.total - i.paidAmount), 0) + (opening > 0 ? opening : 0);
+
+    return (
+      '<div class="doc-section-title">كشف حساب بـ' + currencyLabel(cur) + '</div>' +
+      '<table class="doc-table"><thead><tr><th>التاريخ</th><th>الحركة</th><th>مدين</th><th>دائن</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+      '<div class="doc-totals">' +
+        '<div class="grand"><span>إجمالي الباقي بـ' + currencyLabel(cur) + '</span><span class="amt-us">' + formatMoney(theyOweUs, cur) + '</span></div>' +
+      '</div>'
+    );
+  }
 
   const meta = '<div class="doc-meta">العميل: ' + esc(customer.name) + '<br/>تاريخ التقرير: ' + formatDate(new Date().toISOString()) + '</div>';
   const html =
     docHeaderHtml('كشف حساب', meta) +
-    '<table class="doc-table"><thead><tr><th>التاريخ</th><th>الحركة</th><th>مدين</th><th>دائن</th></tr></thead><tbody>' + rows + '</tbody></table>' +
-    '<div class="doc-totals">' +
-      '<div class="grand"><span>إجمالي الباقي</span><span class="amt-us">' + formatMoney(theyOweUs) + '</span></div>' +
-    '</div>' +
+    buildSection('IQD') +
+    buildSection('USD') +
     '<div class="doc-footer">تم إنشاء هذا المستند بواسطة دفتر الفواتير — ' + formatDate(new Date().toISOString(), true) + '</div>';
 
   openPrintPreview(html, 'كشف-حساب-' + (customer ? customer.name : ''));
@@ -1213,14 +1563,18 @@ function printHistoryReport(list) {
   let rows = '';
   const KIND_LABEL = { sale_invoice: 'فاتورة بيع', purchase_invoice: 'فاتورة شراء', sale_payment: 'دفعة بيع', purchase_payment: 'دفعة شراء' };
   list.forEach((h) => {
-    rows += '<tr><td>' + formatDate(h.date, true) + '</td><td>' + esc(customerName(h.customerId)) + '</td><td>' + (KIND_LABEL[h.kind] || h.kind) + '</td><td>' + formatMoney(h.amount) + '</td></tr>';
+    rows += '<tr><td>' + formatDate(h.date, true) + '</td><td>' + esc(customerName(h.customerId)) + '</td><td>' + (KIND_LABEL[h.kind] || h.kind) + '</td><td>' + formatMoney(h.amount, h.currency) + '</td></tr>';
   });
-  const total = list.reduce((s, h) => s + h.amount, 0);
+  const totalIqd = list.filter((h) => h.currency !== 'USD').reduce((s, h) => s + h.amount, 0);
+  const totalUsd = list.filter((h) => h.currency === 'USD').reduce((s, h) => s + h.amount, 0);
   const meta = '<div class="doc-meta">عدد الحركات: ' + list.length + '<br/>تاريخ التقرير: ' + formatDate(new Date().toISOString()) + '</div>';
   const html =
     docHeaderHtml('تقرير السجل', meta) +
     '<table class="doc-table"><thead><tr><th>التاريخ</th><th>العميل</th><th>نوع الحركة</th><th>المبلغ</th></tr></thead><tbody>' + rows + '</tbody></table>' +
-    '<div class="doc-totals"><div class="grand"><span>إجمالي المبالغ</span><span>' + formatMoney(total) + '</span></div></div>' +
+    '<div class="doc-totals">' +
+      '<div class="grand"><span>إجمالي المبالغ بالدينار</span><span>' + formatMoney(totalIqd, 'IQD') + '</span></div>' +
+      '<div class="grand"><span>إجمالي المبالغ بالدولار</span><span>' + formatMoney(totalUsd, 'USD') + '</span></div>' +
+    '</div>' +
     '<div class="doc-footer">تم إنشاء هذا المستند بواسطة دفتر الفواتير — ' + formatDate(new Date().toISOString(), true) + '</div>';
   openPrintPreview(html, 'تقرير-السجل-' + formatDate(new Date().toISOString()));
 }
@@ -1341,5 +1695,6 @@ async function selectInvoiceResult(type, invoice) {
 (async function bootstrap() {
   STATE.settings = await window.api.settings.get();
   qs('#brandCompanyName').textContent = STATE.settings.companyName || 'دفتر الفواتير';
+  applyBrandLogo();
   navigate('dashboard');
 })();

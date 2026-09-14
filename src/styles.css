@@ -39,6 +39,16 @@ html, body {
   font-family: 'Dubai', 'Segoe UI', Tahoma, Arial, sans-serif;
   font-size: 14.5px;
   -webkit-font-smoothing: antialiased;
+  /* منع تظليل النص الأزرق العرضي عند النقر والسحب بالماوس على عناصر الواجهة
+     (الأزرار، الجداول، الشريط الجانبي...)، مع الإبقاء على التحديد الطبيعي
+     داخل حقول الإدخال والنصوص القابلة للتعديل أدناه */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input, textarea, [contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
@@ -82,6 +92,8 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; colo
   font-size: 18px;
   flex-shrink: 0;
 }
+
+.brand-mark img { width: 100%; height: 100%; object-fit: contain; border-radius: 8px; background: #fff; }
 
 .brand-text { display: flex; flex-direction: column; overflow: hidden; }
 .brand-title { font-weight: 700; font-size: 15px; color: #F2F7F4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -411,6 +423,20 @@ tbody tr:hover { background: #FBFAF6; }
 .doc-header h2 { margin: 0 0 4px 0; font-size: 18px; }
 .doc-header .doc-meta { font-size: 12.5px; color: var(--ink-muted); }
 .doc-header .doc-type { text-align: left; font-weight: 700; font-size: 15px; }
+.doc-header-brand { display: flex; align-items: center; gap: 10px; }
+.doc-header-logo { width: 46px; height: 46px; object-fit: contain; flex-shrink: 0; }
+
+.logo-upload-row { display: flex; align-items: center; gap: 14px; }
+.logo-preview {
+  width: 64px; height: 64px; border-radius: 8px; border: 1px dashed var(--border, #ccc);
+  display: flex; align-items: center; justify-content: center; overflow: hidden; flex-shrink: 0; background: #fafafa;
+}
+.logo-preview img { width: 100%; height: 100%; object-fit: contain; }
+.logo-preview .logo-placeholder { font-size: 11px; color: var(--ink-muted, #999); text-align: center; padding: 4px; }
+.badge-usd {
+  display: inline-block; margin-inline-start: 6px; padding: 1px 7px; border-radius: 10px;
+  background: #e6f4ea; color: #1a7d3a; font-size: 11px; font-weight: 700; vertical-align: middle;
+}
 .doc-section-title { font-weight: 700; margin: 14px 0 6px 0; font-size: 13px; }
 .doc-table { width: 100%; border-collapse: collapse; margin-top: 6px; }
 .doc-table th { text-align: right; font-size: 12px; border-bottom: 1px solid var(--ink); padding: 6px 4px; }
@@ -427,6 +453,71 @@ tbody tr:hover { background: #FBFAF6; }
     position: absolute; inset: 0; padding: 0; box-shadow: none; width: 100%;
   }
 }
+
+/* ---------------- عن البرنامج ---------------- */
+.about-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 28px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  max-width: 420px;
+  margin: 0 auto 22px auto;
+}
+.about-app-mark {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 24px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+.about-app-name { font-size: 18px; font-weight: 700; color: var(--ink); }
+.about-app-desc { font-size: 12.5px; color: var(--ink-muted); margin-top: 6px; }
+
+.about-info-list {
+  max-width: 420px;
+  margin: 0 auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.about-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.about-info-row:last-child { border-bottom: none; }
+.about-info-label { font-size: 12.5px; color: var(--ink-muted); font-weight: 600; flex-shrink: 0; }
+.about-info-value { font-size: 13.5px; color: var(--ink); font-weight: 600; text-align: left; }
+
+/* ---------------- ترقيم الصفحات ---------------- */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding: 14px 10px 4px;
+}
+.pager-btn { min-width: 34px; padding: 6px 10px; }
+.pager-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+.pager-ellipsis { padding: 0 4px; color: var(--ink-muted); font-size: 13px; }
+.pager-info { font-size: 12px; color: var(--ink-muted); margin-inline-start: 8px; }
 
 /* ---------------- استجابة الشاشة ---------------- */
 @media (max-width: 1080px) {

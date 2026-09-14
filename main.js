@@ -1,8 +1,43 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const db = require('./db');
+const license = require('./license');
 
 let mainWindow = null;
+let licenseWatchTimer = null;
+
+function currentLicenseStatus() {
+  const status = license.checkStoredLicense(db);
+  return {
+    ok: !!status.ok,
+    reason: status.reason || null,
+    permanent: !!status.permanent,
+    expiryDate: status.expiryDate ? status.expiryDate.toISOString() : null,
+    deviceId: license.getDeviceId(),
+  };
+}
+
+function loadAppropriateScreen() {
+  if (!mainWindow) return;
+  const status = currentLicenseStatus();
+  if (status.ok) {
+    mainWindow.loadFile(path.join(__dirname, 'src', 'index.html'));
+  } else {
+    mainWindow.loadFile(path.join(__dirname, 'src', 'activation.html'));
+  }
+}
+
+function startLicenseWatch() {
+  // إعادة فحص الترخيص بشكل دوري أثناء التشغيل، حتى لو انتهت الصلاحية والبرنامج
+  // مفتوح فعلاً — بدون أي اتصال بالإنترنت، فقط مقارنة التاريخ محلياً.
+  if (licenseWatchTimer) clearInterval(licenseWatchTimer);
+  licenseWatchTimer = setInterval(() => {
+    const status = currentLicenseStatus();
+    if (!status.ok && mainWindow) {
+      mainWindow.loadFile(path.join(__dirname, 'src', 'activation.html'));
+    }
+  }, 60 * 60 * 1000); // كل ساعة
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -21,21 +56,62 @@ function createWindow() {
     autoHideMenuBar: true,
   });
 
-  mainWindow.loadFile(path.join(__dirname, 'src', 'index.html'));
   mainWindow.setMenuBarVisibility(false);
+  // الشاشة المناسبة (تفعيل أو الواجهة الرئيسية) تُحمَّل عبر loadAppropriateScreen() بعد الإنشاء
 }
 
 app.whenReady().then(() => {
   db.init(app.getPath('userData'));
   createWindow();
+  loadAppropriateScreen();
+  startLicenseWatch();
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+      loadAppropriateScreen();
+    }
   });
 });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+// ---------------- IPC: روابط خارجية (اتصال / واتساب) ----------------
+ipcMain.handle('system:openExternal', (e, url) => {
+  if (typeof url === 'string' && /^(https?:|tel:|mailto:)/i.test(url)) {
+    shell.openExternal(url);
+    return { ok: true };
+  }
+  return { ok: false };
+});
+
+// ---------------- IPC: نظام التفعيل (قفل على MAC + مدة، محلي بالكامل) ----------------
+ipcMain.handle('license:getStatus', () => currentLicenseStatus());
+
+ipcMain.handle('license:activate', (e, key) => {
+  const result = license.activate(db, key);
+  return {
+    ok: !!result.ok,
+    reason: result.reason || null,
+    permanent: !!result.permanent,
+    expiryDate: result.expiryDate ? result.expiryDate.toISOString() : null,
+  };
+});
+
+// بعد نجاح التفعيل من شاشة activation.html، ننتقل إلى واجهة البرنامج الرئيسية
+ipcMain.handle('license:enterApp', () => {
+  const status = currentLicenseStatus();
+  if (status.ok) loadAppropriateScreen();
+  return status;
+});
+
+// لإلغاء التفعيل يدوياً على هذا الحاسوب (مثلاً قبل نقل الترخيص إلى جهاز آخر)
+ipcMain.handle('license:deactivate', () => {
+  license.deactivate(db);
+  loadAppropriateScreen();
+  return { ok: true };
 });
 
 // ---------------- IPC: الإعدادات ----------------

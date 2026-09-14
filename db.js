@@ -16,12 +16,15 @@ function defaultData() {
       companyName: 'اسم المنشأة',
       companyPhone: '',
       companyAddress: '',
+      companyLogo: '',
       currency: 'د.ع',
+      usdExchangeRate: 0,
       saleInvoicePrefix: 'S',
       purchaseInvoicePrefix: 'P',
       saleInvoiceCounter: 0,
       purchaseInvoiceCounter: 0,
       autoBackupCustomDir: '',
+      licenseKey: '',
     },
     customers: [],
     saleInvoices: [],
@@ -45,10 +48,19 @@ function init(userDataPath) {
       cache.settings = Object.assign(defaultData().settings, cache.settings || {});
       if (!cache.customers) cache.customers = [];
       // توافق مع البيانات القديمة التي لا تحتوي حقل الرصيد السابق
-      cache.customers.forEach((c) => { if (c.openingBalance === undefined) c.openingBalance = 0; });
+      cache.customers.forEach((c) => {
+        if (c.openingBalance === undefined) c.openingBalance = 0;
+        // رصيد سابق مستقل بالدولار (حساب دولار منفصل تماماً عن حساب الدينار، بدون أي تحويل بينهما)
+        if (c.openingBalanceUsd === undefined) c.openingBalanceUsd = 0;
+        if (c.dealsInUsd === undefined) c.dealsInUsd = false;
+      });
       if (!cache.saleInvoices) cache.saleInvoices = [];
       if (!cache.purchaseInvoices) cache.purchaseInvoices = [];
       if (!cache.payments) cache.payments = [];
+      // توافق مع الفواتير القديمة التي لم تكن تحمل حقل العملة أصلاً (كانت جميعها بالعملة المحلية)
+      cache.saleInvoices.forEach((i) => { if (i.currency !== 'USD') i.currency = 'IQD'; });
+      cache.purchaseInvoices.forEach((i) => { if (i.currency !== 'USD') i.currency = 'IQD'; });
+      cache.payments.forEach((p) => { if (p.currency !== 'USD') p.currency = 'IQD'; });
     } catch (e) {
       // نسخة احتياطية من الملف التالف بدلاً من فقدان البيانات بصمت
       const backupPath = DB_PATH + '.corrupt-' + Date.now() + '.bak';
@@ -144,8 +156,12 @@ function addCustomer(data) {
     phone: (data.phone || '').trim(),
     address: (data.address || '').trim(),
     notes: (data.notes || '').trim(),
-    // رصيد سابق (حساب قديم): موجب = دين قديم على العميل لصالحنا، سالب = دين علينا له
+    // رصيد سابق بالدينار (حساب قديم): موجب = دين قديم على العميل لصالحنا، سالب = دين علينا له
     openingBalance: Number(data.openingBalance) || 0,
+    // رصيد سابق بالدولار: حساب مستقل تماماً عن حساب الدينار أعلاه، بدون أي تحويل تلقائي بينهما
+    openingBalanceUsd: Number(data.openingBalanceUsd) || 0,
+    // هل يتعامل هذا العميل بالدولار بشكل معتاد (يُستخدم لاقتراح عملة الدولار كافتراضي عند إنشاء فاتورة جديدة)
+    dealsInUsd: !!data.dealsInUsd,
     createdAt: nowIso(),
   };
   cache.customers.push(c);
@@ -161,6 +177,8 @@ function updateCustomer(id, patch) {
     address: patch.address !== undefined ? patch.address.trim() : c.address,
     notes: patch.notes !== undefined ? patch.notes.trim() : c.notes,
     openingBalance: patch.openingBalance !== undefined ? (Number(patch.openingBalance) || 0) : (c.openingBalance || 0),
+    openingBalanceUsd: patch.openingBalanceUsd !== undefined ? (Number(patch.openingBalanceUsd) || 0) : (c.openingBalanceUsd || 0),
+    dealsInUsd: patch.dealsInUsd !== undefined ? !!patch.dealsInUsd : !!c.dealsInUsd,
   });
   persist();
   return c;
@@ -211,6 +229,8 @@ function addInvoice(type, data) {
       ? (() => { cache.settings.saleInvoiceCounter += 1; return cache.settings.saleInvoicePrefix + '-' + String(cache.settings.saleInvoiceCounter).padStart(4, '0'); })()
       : (() => { cache.settings.purchaseInvoiceCounter += 1; return cache.settings.purchaseInvoicePrefix + '-' + String(cache.settings.purchaseInvoiceCounter).padStart(4, '0'); })(),
     type,
+    // عملة الفاتورة: دينار أو دولار — حساب مستقل تماماً، كل المبالغ (المبلغ/الخصم/الإجمالي/المدفوع) بنفس هذه العملة
+    currency: data.currency === 'USD' ? 'USD' : 'IQD',
     customerId: data.customerId,
     date: data.date || nowIso(),
     amount,
@@ -250,6 +270,7 @@ function deleteInvoice(type, id) {
 }
 
 // ---------- الدفعات (سداد المستحقات) ----------
+// كل دفعة تكون دائماً بنفس عملة الفاتورة المرتبطة بها (لا يوجد أي تحويل تلقائي بين الدينار والدولار)
 function addPayment(data) {
   const store = data.invoiceType === 'sale' ? 'saleInvoices' : 'purchaseInvoices';
   const inv = getInvoice(store, data.invoiceId);
@@ -265,6 +286,7 @@ function addPayment(data) {
     invoiceNumber: inv.number,
     customerId: inv.customerId,
     amount,
+    currency: inv.currency === 'USD' ? 'USD' : 'IQD',
     date: data.date || nowIso(),
     notes: data.notes || '',
     batchId: data.batchId || null,
@@ -280,32 +302,40 @@ function listPayments() {
 }
 
 // ---------- المستحقات ----------
+// كل عميل له حسابان مستقلان تماماً: بالدينار (theyOweUs/weOweThem) وبالدولار (theyOweUsUsd/weOweThemUsd)
 function getDuesSummary() {
   const byCustomer = {};
   for (const c of cache.customers) {
     const opening = Number(c.openingBalance) || 0;
+    const openingUsd = Number(c.openingBalanceUsd) || 0;
     byCustomer[c.id] = {
       customerId: c.id,
       customerName: c.name,
-      theyOweUs: opening > 0 ? opening : 0, // مستحق لنا من فواتير البيع + رصيد سابق
-      weOweThem: opening < 0 ? -opening : 0, // مستحق علينا من فواتير الشراء + رصيد سابق
+      theyOweUs: opening > 0 ? opening : 0, // مستحق لنا بالدينار من فواتير البيع + رصيد سابق
+      weOweThem: opening < 0 ? -opening : 0, // مستحق علينا بالدينار من فواتير الشراء + رصيد سابق
+      theyOweUsUsd: openingUsd > 0 ? openingUsd : 0, // مستحق لنا بالدولار
+      weOweThemUsd: openingUsd < 0 ? -openingUsd : 0, // مستحق علينا بالدولار
     };
   }
   for (const inv of cache.saleInvoices) {
     const remaining = inv.total - inv.paidAmount;
     if (remaining > 0.0001) {
       if (!byCustomer[inv.customerId]) continue;
-      byCustomer[inv.customerId].theyOweUs += remaining;
+      if (inv.currency === 'USD') byCustomer[inv.customerId].theyOweUsUsd += remaining;
+      else byCustomer[inv.customerId].theyOweUs += remaining;
     }
   }
   for (const inv of cache.purchaseInvoices) {
     const remaining = inv.total - inv.paidAmount;
     if (remaining > 0.0001) {
       if (!byCustomer[inv.customerId]) continue;
-      byCustomer[inv.customerId].weOweThem += remaining;
+      if (inv.currency === 'USD') byCustomer[inv.customerId].weOweThemUsd += remaining;
+      else byCustomer[inv.customerId].weOweThem += remaining;
     }
   }
-  return Object.values(byCustomer).filter((c) => c.theyOweUs > 0.0001 || c.weOweThem > 0.0001);
+  return Object.values(byCustomer).filter(
+    (c) => c.theyOweUs > 0.0001 || c.weOweThem > 0.0001 || c.theyOweUsUsd > 0.0001 || c.weOweThemUsd > 0.0001
+  );
 }
 
 // ---------- السجل / التاريخ ----------
@@ -318,6 +348,7 @@ function getHistory() {
       date: inv.date,
       customerId: inv.customerId,
       amount: inv.total,
+      currency: inv.currency || 'IQD',
       label: 'فاتورة بيع رقم ' + inv.number,
     });
   }
@@ -328,6 +359,7 @@ function getHistory() {
       date: inv.date,
       customerId: inv.customerId,
       amount: inv.total,
+      currency: inv.currency || 'IQD',
       label: 'فاتورة شراء رقم ' + inv.number,
     });
   }
@@ -338,6 +370,7 @@ function getHistory() {
       date: p.date,
       customerId: p.customerId,
       amount: p.amount,
+      currency: p.currency || 'IQD',
       label: (p.invoiceType === 'sale' ? 'دفعة على فاتورة بيع ' : 'دفعة على فاتورة شراء ') + p.invoiceNumber,
     });
   }
@@ -356,6 +389,14 @@ function restoreAll(data) {
     purchaseInvoices: Array.isArray(data && data.purchaseInvoices) ? data.purchaseInvoices : [],
     payments: Array.isArray(data && data.payments) ? data.payments : [],
   };
+  next.customers.forEach((c) => {
+    if (c.openingBalance === undefined) c.openingBalance = 0;
+    if (c.openingBalanceUsd === undefined) c.openingBalanceUsd = 0;
+    if (c.dealsInUsd === undefined) c.dealsInUsd = false;
+  });
+  next.saleInvoices.forEach((i) => { if (i.currency !== 'USD') i.currency = 'IQD'; });
+  next.purchaseInvoices.forEach((i) => { if (i.currency !== 'USD') i.currency = 'IQD'; });
+  next.payments.forEach((p) => { if (p.currency !== 'USD') p.currency = 'IQD'; });
   cache = next;
   persist();
   return cache;
@@ -363,19 +404,27 @@ function restoreAll(data) {
 
 // ---------- لوحة التحكم ----------
 function getDashboardSummary() {
-  const totalSales = cache.saleInvoices.reduce((s, i) => s + i.total, 0);
-  const totalPurchases = cache.purchaseInvoices.reduce((s, i) => s + i.total, 0);
+  const totalSales = cache.saleInvoices.filter((i) => i.currency !== 'USD').reduce((s, i) => s + i.total, 0);
+  const totalSalesUsd = cache.saleInvoices.filter((i) => i.currency === 'USD').reduce((s, i) => s + i.total, 0);
+  const totalPurchases = cache.purchaseInvoices.filter((i) => i.currency !== 'USD').reduce((s, i) => s + i.total, 0);
+  const totalPurchasesUsd = cache.purchaseInvoices.filter((i) => i.currency === 'USD').reduce((s, i) => s + i.total, 0);
   const dues = getDuesSummary();
   const totalTheyOweUs = dues.reduce((s, d) => s + d.theyOweUs, 0);
   const totalWeOweThem = dues.reduce((s, d) => s + d.weOweThem, 0);
+  const totalTheyOweUsUsd = dues.reduce((s, d) => s + d.theyOweUsUsd, 0);
+  const totalWeOweThemUsd = dues.reduce((s, d) => s + d.weOweThemUsd, 0);
   return {
     customersCount: cache.customers.length,
     saleInvoicesCount: cache.saleInvoices.length,
     purchaseInvoicesCount: cache.purchaseInvoices.length,
     totalSales,
+    totalSalesUsd,
     totalPurchases,
+    totalPurchasesUsd,
     totalTheyOweUs,
     totalWeOweThem,
+    totalTheyOweUsUsd,
+    totalWeOweThemUsd,
   };
 }
 

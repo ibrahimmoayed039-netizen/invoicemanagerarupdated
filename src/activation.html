@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;" />
+<title>تفعيل البرنامج</title>
+<link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="activation.css" />
+</head>
+<body class="activation-body">
+
+  <div class="activation-wrap">
+    <div class="activation-card">
+      <div class="about-app-mark" id="actAppMark" style="margin:0 auto 14px auto">ف</div>
+      <div class="about-app-name" style="text-align:center">تفعيل البرنامج</div>
+      <div class="about-app-desc" id="actSubtitle" style="text-align:center">أدخل مفتاح التفعيل لبدء استخدام البرنامج</div>
+
+      <div id="actStatusMsg" class="activation-status hidden"></div>
+
+      <div class="section-title">رمز هذا الحاسوب</div>
+      <div class="activation-device-row">
+        <input id="actDeviceId" class="input" readonly style="text-align:center;font-weight:700;letter-spacing:1px" />
+        <button id="actCopyBtn" class="btn btn-ghost btn-sm" type="button">نسخ</button>
+      </div>
+      <div class="field-hint" style="grid-column:auto;margin-top:6px">
+        أرسل هذا الرمز إلى المطوّر لتحصل على مفتاح تفعيل خاص بهذا الحاسوب فقط.
+      </div>
+      <div class="toolbar" style="margin-top:10px">
+        <button id="actWhatsappBtn" class="btn btn-ghost btn-sm" type="button">💬 إرسال الرمز عبر واتساب</button>
+      </div>
+
+      <div class="section-title">مفتاح التفعيل</div>
+      <input id="actKeyInput" class="input activation-key-input" type="text"
+             placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false" />
+
+      <button id="actSubmitBtn" class="btn btn-primary activation-submit" type="button">تفعيل البرنامج</button>
+    </div>
+  </div>
+
+  <script src="activation.js"></script>
+</body>
+</html>
