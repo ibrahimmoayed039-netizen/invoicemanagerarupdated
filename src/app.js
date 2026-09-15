@@ -174,13 +174,14 @@ function todayInputValue() {
   const d = new Date();
   return d.toISOString().slice(0, 10);
 }
-function dateInputToISO(value) {
-  // value is "YYYY-MM-DD" from a <input type="date">. Build it in LOCAL time
-  // (not UTC) so it doesn't shift to 03:00 (or any other hour) once displayed
-  // in the user's timezone. Falls back to "now" when empty.
-  if (!value) return new Date().toISOString();
+function dateInputToISONow(value) {
+  // value هو "YYYY-MM-DD" من <input type="date"> — نأخذ اليوم/الشهر/السنة من الحقل، ونأخذ
+  // الساعة/الدقيقة/الثانية من الوقت الفعلي بالجهاز لحظة الاستدعاء (بدل تثبيتها على منتصف الليل)
+  // — تُستخدم عند إنشاء الفواتير وتسجيل التسديدات لتُسجَّل لحظة الضغط الحقيقية دون حقل وقت يدوي
+  const now = new Date();
+  if (!value) return now.toISOString();
   const [y, m, d] = value.split('-').map(Number);
-  const local = new Date(y, (m || 1) - 1, d || 1, 0, 0, 0, 0);
+  const local = new Date(y, (m || 1) - 1, d || 1, now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
   return local.toISOString();
 }
 function toast(msg, isError) {
@@ -512,7 +513,7 @@ async function quickSettleForCustomer(customerId, onDone) {
       const result = amountBlock.getResult();
       if (result.error) { toast(result.error, true); return; }
       let leftover = result.amount;
-      const paymentDate = dateInputToISO(dateInput.value);
+      const paymentDate = dateInputToISONow(dateInput.value);
       const notes = notesInput.value;
       const batchId = 'batch_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
       for (const item of sorted) {
@@ -968,7 +969,7 @@ function openInvoiceForm(type, existing, presetCustomerId, onDone) {
       if (amount <= 0) { toast('أدخل مبلغاً أكبر من صفر', true); return; }
       const data = {
         customerId: custSelect.value,
-        date: dateInputToISO(dateInput.value),
+        date: dateInputToISONow(dateInput.value),
         currency: currencySelect.value === 'USD' ? 'USD' : 'IQD',
         amount,
         discount: numVal(discountInput),
@@ -1023,7 +1024,7 @@ async function openPaymentForm(type, invoice, onDone) {
         invoiceId: invoice.id,
         invoiceType: type,
         amount: result.amount,
-        date: dateInputToISO(dateInput.value),
+        date: dateInputToISONow(dateInput.value),
         notes: notesInput.value,
       });
       if (!res.ok) { toast('تعذر تسجيل الدفعة', true); return; }
