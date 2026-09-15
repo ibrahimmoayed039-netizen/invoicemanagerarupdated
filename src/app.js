@@ -82,7 +82,7 @@ function moneyField(name, label, value) {
 }
 // ---------------- حقل مبلغ تسديد بعملة ثابتة (بدون أي تحويل تلقائي) ----------------
 // يُستخدم لتسديد فاتورة/رصيد سابق بعينه؛ العملة دائماً هي عملة الفاتورة نفسها (لا تحويل بين الدينار والدولار).
-function buildPaymentAmountBlock(labelText, defaultAmount, currency) {
+function buildPaymentAmountBlock(labelText, defaultAmount, currency, maxAmount) {
   const cur = currency === 'USD' ? 'USD' : 'IQD';
   const amountInput = moneyInput({ class: 'input', placeholder: 'أدخل المبلغ', value: defaultAmount || '' });
   const wrap = el('div', { class: 'field' }, [el('label', {}, [labelText + ' (' + currencyLabel(cur) + ')']), amountInput]);
@@ -90,7 +90,10 @@ function buildPaymentAmountBlock(labelText, defaultAmount, currency) {
     nodes: [wrap],
     getResult: () => {
       const amount = numVal(amountInput);
-      if (amount <= 0) return null;
+      if (amount <= 0) return { error: 'أدخل مبلغاً صحيحاً' };
+      if (maxAmount !== undefined && maxAmount !== null && amount > maxAmount + 0.0001) {
+        return { error: 'المبلغ المدخل (' + formatMoney(amount, cur) + ') أكبر من المبلغ المستحق (' + formatMoney(maxAmount, cur) + ')' };
+      }
       return { amount, currency: cur };
     },
   };
@@ -502,12 +505,12 @@ async function quickSettleForCustomer(customerId, onDone) {
       if (b.type === 'opening') return 1;
       return new Date(a.inv.date) - new Date(b.inv.date);
     });
-    const amountBlock = buildPaymentAmountBlock('المبلغ المدفوع الآن (من المجموع)', undefined, currency);
+    const amountBlock = buildPaymentAmountBlock('المبلغ المدفوع الآن (من المجموع)', undefined, currency, grandTotal);
     const dateInput = el('input', { class: 'input', type: 'date', value: todayInputValue() });
     const notesInput = el('textarea', { class: 'input', rows: 2 });
     const settle = async () => {
       const result = amountBlock.getResult();
-      if (!result) { toast('أدخل مبلغاً صحيحاً', true); return; }
+      if (result.error) { toast(result.error, true); return; }
       let leftover = result.amount;
       const paymentDate = dateInputToISO(dateInput.value);
       const notes = notesInput.value;
@@ -588,12 +591,12 @@ async function quickSettleForCustomer(customerId, onDone) {
 function openOpeningBalanceSettleForm(customer, currency, onDone) {
   const cur = currency === 'USD' ? 'USD' : 'IQD';
   const field = cur === 'USD' ? 'openingBalanceUsd' : 'openingBalance';
-  const amountBlock = buildPaymentAmountBlock('المبلغ المسدد', customer[field], cur);
+  const amountBlock = buildPaymentAmountBlock('المبلغ المسدد', customer[field], cur, Number(customer[field]) > 0 ? Number(customer[field]) : null);
   const body = el('div', { class: 'form-grid' }, [...amountBlock.nodes]);
   const footer = [
     el('button', { class: 'btn btn-primary', onclick: async () => {
       const result = amountBlock.getResult();
-      if (!result) { toast('أدخل مبلغاً صحيحاً', true); return; }
+      if (result.error) { toast(result.error, true); return; }
       await window.api.payments.settleOpening(customer.id, cur, result.amount, new Date().toISOString(), '');
       closeModal();
       toast('تم تسجيل تسديد الرصيد السابق');
@@ -617,14 +620,21 @@ async function openCustomerProfile(id) {
   const ledgerUsd = buildCustomerLedger(customer, mySales, myPayments, 'USD');
   const balIqd = ledgerIqd.length ? ledgerIqd[ledgerIqd.length - 1].balance : 0;
   const balUsd = ledgerUsd.length ? ledgerUsd[ledgerUsd.length - 1].balance : 0;
-  const balLabel = (b) => (Math.abs(b) < 0.001 ? ' (مسدد بالكامل)' : ' (الباقي)');
+  const balStatCard = (label, bal, cur) => {
+    const settled = Math.abs(bal) < 0.001;
+    const cls = settled ? '' : (bal > 0 ? 'owed-us' : 'owed-them');
+    const value = settled ? 'مسدد بالكامل ✓' : formatMoney(Math.abs(bal), cur) + (bal > 0 ? ' — مستحق لنا' : ' — مستحق عليكم');
+    return statCard(label, value, cls);
+  };
 
   const body = el('div', {}, [
     el('div', { class: 'form-grid' }, [
       infoLine('الهاتف', customer.phone || '—'),
       infoLine('العنوان', customer.address || '—'),
-      infoLine('الرصيد الحالي بالدينار', formatMoney(Math.abs(balIqd), 'IQD') + balLabel(balIqd)),
-      infoLine('الرصيد الحالي بالدولار', formatMoney(Math.abs(balUsd), 'USD') + balLabel(balUsd)),
+    ]),
+    el('div', { class: 'stat-grid', style: 'margin-top:6px' }, [
+      balStatCard('الرصيد الحالي بالدينار', balIqd, 'IQD'),
+      balStatCard('الرصيد الحالي بالدولار', balUsd, 'USD'),
     ]),
     el('div', { class: 'section-title' }, ['دفتر حساب الدينار (بيع وتسديد)']),
     customerLedgerTable(ledgerIqd.slice().reverse(), 'IQD'),
@@ -648,23 +658,23 @@ function buildCustomerLedger(customer, sales, payments, currency) {
     : (Number(customer && (customer.openingBalanceOriginal !== undefined ? customer.openingBalanceOriginal : customer.openingBalance)) || 0);
   const events = [];
   if (openingOriginal) {
-    events.push({ date: (customer && customer.createdAt) || new Date(0).toISOString(), label: 'حساب قديم', amount: openingOriginal });
+    events.push({ date: (customer && customer.createdAt) || new Date(0).toISOString(), label: 'حساب قديم', amount: openingOriginal, kind: 'opening' });
   }
   // تسديدات الرصيد القديم (حركات مستقلة تُسجَّل عند التسديد، ولا تُحذف عند اكتمال السداد)
   const openingPayments = payments.filter((p) => p.invoiceType === 'opening' && (p.currency === 'USD' ? 'USD' : 'IQD') === cur);
   openingPayments.forEach((p) => {
-    events.push({ date: p.date, label: 'تسديد رصيد قديم', amount: -(Number(p.amount) || 0) });
+    events.push({ date: p.date, label: 'تسديد رصيد قديم', amount: -(Number(p.amount) || 0), kind: 'payment' });
   });
   const salesInCur = sales.filter((i) => (i.currency === 'USD' ? 'USD' : 'IQD') === cur);
   salesInCur.forEach((i) => {
-    events.push({ date: i.date, label: 'فاتورة بيع ' + i.number, amount: i.total });
+    events.push({ date: i.date, label: 'فاتورة بيع ' + i.number, amount: i.total, kind: 'invoice' });
     // أي مبلغ دُفع عند إنشاء/تعديل الفاتورة مباشرة (paidAmount) دون المرور بعملية "تسديد" منفصلة
     const paidViaPayments = payments
       .filter((p) => p.invoiceType === 'sale' && p.invoiceId === i.id)
       .reduce((s, p) => s + (Number(p.amount) || 0), 0);
     const paidAtCreation = Math.max(0, (Number(i.paidAmount) || 0) - paidViaPayments);
     if (paidAtCreation > 0.001) {
-      events.push({ date: i.date, label: 'دفعة عند البيع — فاتورة ' + i.number, amount: -paidAtCreation });
+      events.push({ date: i.date, label: 'دفعة عند البيع — فاتورة ' + i.number, amount: -paidAtCreation, kind: 'payment' });
     }
   });
   const salePayments = payments.filter((p) => p.invoiceType === 'sale' && (p.currency === 'USD' ? 'USD' : 'IQD') === cur);
@@ -678,32 +688,53 @@ function buildCustomerLedger(customer, sales, payments, currency) {
       single.push(p);
     }
   });
-  single.forEach((p) => events.push({ date: p.date, label: 'تسديد — فاتورة ' + p.invoiceNumber, amount: -p.amount }));
-  Object.values(batched).forEach((b) => events.push({ date: b.date, label: 'تسديد (مجمّع)', amount: -b.amount }));
+  single.forEach((p) => events.push({ date: p.date, label: 'تسديد — فاتورة ' + p.invoiceNumber, amount: -p.amount, kind: 'payment' }));
+  Object.values(batched).forEach((b) => events.push({ date: b.date, label: 'تسديد (مجمّع)', amount: -b.amount, kind: 'payment' }));
   events.sort((a, b) => new Date(a.date) - new Date(b.date));
   let running = 0;
   return events.map((e) => {
     running += e.amount;
-    return { date: e.date, label: e.label, amount: e.amount, balance: running };
+    return { date: e.date, label: e.label, amount: e.amount, kind: e.kind, balance: running };
   });
 }
+
+const LEDGER_KIND_BADGE = {
+  opening: { label: 'حساب قديم', cls: 'badge-neutral' },
+  invoice: { label: 'فاتورة بيع', cls: 'badge-invoice' },
+  payment: { label: 'تسديد', cls: 'badge-payment' },
+};
 
 function customerLedgerTable(events, currency) {
   if (events.length === 0) return emptyState('لا توجد حركات بعد', 'لا توجد حركات بهذه العملة لهذا العميل بعد.');
   const wrap = el('div', { class: 'table-wrap' });
   const table = el('table', {}, [el('thead', {}, [el('tr', {}, [
-    el('th', {}, ['التاريخ']), el('th', {}, ['البيان']), el('th', {}, ['المبلغ']), el('th', {}, ['الإجمالي']),
+    el('th', {}, ['التاريخ']), el('th', {}, ['النوع']), el('th', {}, ['البيان']),
+    el('th', {}, ['مدين (له)']), el('th', {}, ['دائن (عليه)']), el('th', {}, ['الرصيد بعدها']),
   ])])]);
   const tbody = el('tbody');
+  let totalDebit = 0, totalCredit = 0;
   events.forEach((e) => {
+    const debit = e.amount > 0 ? e.amount : 0;
+    const credit = e.amount < 0 ? -e.amount : 0;
+    totalDebit += debit; totalCredit += credit;
+    const badge = LEDGER_KIND_BADGE[e.kind] || LEDGER_KIND_BADGE.payment;
     tbody.appendChild(el('tr', {}, [
       el('td', {}, [formatDate(e.date, true)]),
+      el('td', {}, [el('span', { class: 'badge ' + badge.cls }, [badge.label])]),
       el('td', {}, [e.label]),
-      el('td', { class: 'num' }, [el('span', { class: e.amount >= 0 ? 'amt-us' : 'amt-them' }, [formatMoney(Math.abs(e.amount), currency)])]),
+      el('td', { class: 'num' }, [debit > 0.001 ? el('span', { class: 'amt-us' }, [formatMoney(debit, currency)]) : '—']),
+      el('td', { class: 'num' }, [credit > 0.001 ? el('span', { class: 'amt-them' }, [formatMoney(credit, currency)]) : '—']),
       el('td', { class: 'num' }, [Math.abs(e.balance) > 0.001 ? el('span', { class: e.balance >= 0 ? 'amt-us' : 'amt-them' }, [formatMoney(Math.abs(e.balance), currency)]) : formatMoney(0, currency)]),
     ]));
   });
+  const tfoot = el('tfoot', {}, [el('tr', { class: 'ledger-totals-row' }, [
+    el('td', { colspan: '3' }, ['الإجمالي']),
+    el('td', { class: 'num' }, [el('span', { class: 'amt-us' }, [formatMoney(totalDebit, currency)])]),
+    el('td', { class: 'num' }, [el('span', { class: 'amt-them' }, [formatMoney(totalCredit, currency)])]),
+    el('td', {}, []),
+  ])]);
   table.appendChild(tbody);
+  table.appendChild(tfoot);
   wrap.appendChild(table);
   return wrap;
 }
@@ -967,7 +998,7 @@ async function getCustomerCached(id) {
 async function openPaymentForm(type, invoice, onDone) {
   const remaining = invoice.total - invoice.paidAmount;
   const cur = invoice.currency === 'USD' ? 'USD' : 'IQD';
-  const amountBlock = buildPaymentAmountBlock('المبلغ المدفوع الآن', undefined, cur);
+  const amountBlock = buildPaymentAmountBlock('المبلغ المدفوع الآن', undefined, cur, remaining);
   const dateInput = el('input', { class: 'input', type: 'date', value: todayInputValue() });
   const notesInput = el('textarea', { class: 'input', rows: 2 });
   const body = el('div', { class: 'form-grid' }, [
@@ -979,7 +1010,7 @@ async function openPaymentForm(type, invoice, onDone) {
   const footer = [
     el('button', { class: 'btn btn-primary', onclick: async () => {
       const result = amountBlock.getResult();
-      if (!result) { toast('أدخل مبلغاً صحيحاً', true); return; }
+      if (result.error) { toast(result.error, true); return; }
       const res = await window.api.payments.add({
         invoiceId: invoice.id,
         invoiceType: type,

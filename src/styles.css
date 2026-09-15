@@ -293,6 +293,18 @@ tbody tr:hover { background: #FBFAF6; }
 .badge-paid { background: var(--primary-tint); color: var(--primary-dark); }
 .badge-partial { background: var(--owed-by-us-tint); color: var(--owed-by-us); }
 .badge-unpaid { background: var(--owed-to-us-tint); color: var(--owed-to-us); }
+.badge-neutral { background: #EDEAE0; color: var(--ink-muted); }
+.badge-invoice { background: var(--owed-to-us-tint); color: var(--owed-to-us); }
+.badge-payment { background: var(--primary-tint); color: var(--primary-dark); }
+
+tfoot td {
+  padding: 11px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  background: var(--bg);
+  border-top: 2px solid var(--border);
+}
+.ledger-totals-row td:first-child { color: var(--ink-muted); font-weight: 600; }
 
 /* ---------------- أدوات فلترة ---------------- */
 .toolbar {
