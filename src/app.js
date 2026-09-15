@@ -658,7 +658,15 @@ function buildCustomerLedger(customer, sales, payments, currency) {
     : (Number(customer && (customer.openingBalanceOriginal !== undefined ? customer.openingBalanceOriginal : customer.openingBalance)) || 0);
   const events = [];
   if (openingOriginal) {
-    events.push({ date: (customer && customer.createdAt) || new Date(0).toISOString(), label: 'حساب قديم', amount: openingOriginal, kind: 'opening' });
+    // sortDate تاريخ ثابت قديم جداً يضمن ظهور "حساب قديم" أول حركة بالترتيب دائماً، بينما date هو تاريخ العرض
+    // الفعلي (تاريخ إضافة العميل) — بذلك يبقى الترتيب صحيحاً والتاريخ المعروض بالجدول منطقياً بنفس الوقت
+    events.push({
+      date: (customer && customer.createdAt) || new Date(0).toISOString(),
+      sortDate: new Date(0).toISOString(),
+      label: 'حساب قديم',
+      amount: openingOriginal,
+      kind: 'opening',
+    });
   }
   // تسديدات الرصيد القديم (حركات مستقلة تُسجَّل عند التسديد، ولا تُحذف عند اكتمال السداد)
   const openingPayments = payments.filter((p) => p.invoiceType === 'opening' && (p.currency === 'USD' ? 'USD' : 'IQD') === cur);
@@ -690,7 +698,7 @@ function buildCustomerLedger(customer, sales, payments, currency) {
   });
   single.forEach((p) => events.push({ date: p.date, label: 'تسديد — فاتورة ' + p.invoiceNumber, amount: -p.amount, kind: 'payment' }));
   Object.values(batched).forEach((b) => events.push({ date: b.date, label: 'تسديد (مجمّع)', amount: -b.amount, kind: 'payment' }));
-  events.sort((a, b) => new Date(a.date) - new Date(b.date));
+  events.sort((a, b) => new Date(a.sortDate || a.date) - new Date(b.sortDate || b.date));
   let running = 0;
   return events.map((e) => {
     running += e.amount;
@@ -1332,6 +1340,77 @@ async function renderSettings(area) {
   }
   area.appendChild(autoActions);
 
+  // ---- نسخة احتياطية يومية عبر البريد الإلكتروني ----
+  const emailCfg = Object.assign({ enabled: false, to: '', host: '', port: 587, secure: false, user: '', pass: '', lastSentDate: '' }, settings.backupEmail || {});
+  area.appendChild(el('div', { class: 'section-title' }, ['نسخة احتياطية يومية عبر البريد الإلكتروني']));
+  area.appendChild(el('div', { class: 'field-hint' }, [
+    'يرسل البرنامج نسخة احتياطية (JSON) تلقائياً مرة واحدة يومياً إلى البريد المحدّد أدناه — أول مرة يُفتح بها البرنامج في ذلك اليوم (لا يعمل والبرنامج مغلق تماماً). لحسابات Gmail يلزم إنشاء "كلمة مرور تطبيق" بدل كلمة المرور العادية.',
+  ]));
+  const emailEnabledInput = el('input', { type: 'checkbox', id: 'backupEmailEnabled', checked: emailCfg.enabled ? 'checked' : undefined });
+  const emailToInput = el('input', { class: 'input', type: 'email', placeholder: 'example@gmail.com', value: emailCfg.to });
+  const emailHostInput = el('input', { class: 'input', placeholder: 'smtp.gmail.com', value: emailCfg.host });
+  const emailPortInput = el('input', { class: 'input', type: 'number', placeholder: '587', value: emailCfg.port || 587 });
+  const emailSecureInput = el('input', { type: 'checkbox', id: 'backupEmailSecure', checked: emailCfg.secure ? 'checked' : undefined });
+  const emailUserInput = el('input', { class: 'input', type: 'email', placeholder: 'البريد المرسِل — example@gmail.com', value: emailCfg.user });
+  const emailPassInput = el('input', { class: 'input', type: 'password', placeholder: 'كلمة المرور / كلمة مرور التطبيق', value: emailCfg.pass });
+
+  const emailGrid = el('div', { class: 'form-grid' }, [
+    el('div', { class: 'field field-full', style: 'flex-direction:row;align-items:center;gap:8px' }, [
+      emailEnabledInput, el('label', { for: 'backupEmailEnabled' }, ['تفعيل الإرسال اليومي التلقائي']),
+    ]),
+    el('div', { class: 'field' }, [el('label', {}, ['البريد المُرسَل إليه (المستلم)']), emailToInput]),
+    el('div', { class: 'field' }, [el('label', {}, ['البريد المرسِل (اسم المستخدم)']), emailUserInput]),
+    el('div', { class: 'field' }, [el('label', {}, ['كلمة المرور']), emailPassInput]),
+    el('div', { class: 'field' }, [el('label', {}, ['خادم SMTP']), emailHostInput]),
+    el('div', { class: 'field' }, [el('label', {}, ['المنفذ (Port)']), emailPortInput]),
+    el('div', { class: 'field', style: 'flex-direction:row;align-items:center;gap:8px' }, [
+      emailSecureInput, el('label', { for: 'backupEmailSecure' }, ['اتصال مشفّر SSL (منفذ 465 عادةً)']),
+    ]),
+  ]);
+  area.appendChild(emailGrid);
+  if (emailCfg.lastSentDate) {
+    area.appendChild(el('div', { class: 'field-hint' }, ['آخر نسخة أُرسلت فعلياً بتاريخ: ' + emailCfg.lastSentDate]));
+  }
+  const emailActions = el('div', { class: 'toolbar', style: 'margin-top:8px' });
+  const readEmailCfg = () => ({
+    enabled: emailEnabledInput.checked,
+    to: emailToInput.value.trim(),
+    host: emailHostInput.value.trim(),
+    port: Number(emailPortInput.value) || 587,
+    secure: emailSecureInput.checked,
+    user: emailUserInput.value.trim(),
+    pass: emailPassInput.value,
+    lastSentDate: emailCfg.lastSentDate || '',
+  });
+  emailActions.appendChild(el('button', { class: 'btn btn-primary', onclick: async () => {
+    const cfg = readEmailCfg();
+    if (cfg.enabled && (!cfg.to || !cfg.host || !cfg.user || !cfg.pass)) {
+      toast('أكمل بيانات البريد كاملة قبل تفعيل الإرسال التلقائي', true);
+      return;
+    }
+    STATE.settings = await window.api.settings.update({ backupEmail: cfg });
+    toast('تم حفظ إعدادات البريد');
+  }}, ['حفظ إعدادات البريد']));
+  emailActions.appendChild(el('button', { class: 'btn btn-ghost', onclick: async () => {
+    const cfg = readEmailCfg();
+    if (!cfg.to || !cfg.host || !cfg.user || !cfg.pass) {
+      toast('أكمل بيانات البريد كاملة أولاً (ويفضّل حفظها) قبل الإرسال التجريبي', true);
+      return;
+    }
+    STATE.settings = await window.api.settings.update({ backupEmail: cfg });
+    toast('جارٍ إرسال نسخة تجريبية...');
+    const res = await window.api.backup.sendEmailNow();
+    if (res.ok) {
+      toast('تم إرسال النسخة الاحتياطية بنجاح');
+      navigate('settings');
+    } else if (res.reason === 'missing_config') {
+      toast('أكمل بيانات البريد كاملة أولاً', true);
+    } else {
+      toast('تعذّر الإرسال: ' + (res.message || 'تحقق من بيانات البريد والاتصال بالإنترنت'), true);
+    }
+  }}, ['✉ إرسال نسخة الآن (تجربة)']));
+  area.appendChild(emailActions);
+
   area.appendChild(el('div', { class: 'section-title' }, ['معلومات الترقيم']));
   area.appendChild(el('div', {}, [
     'آخر رقم فاتورة بيع: ' + settings.saleInvoiceCounter + ' — آخر رقم فاتورة شراء: ' + settings.purchaseInvoiceCounter,
@@ -1582,7 +1661,10 @@ async function printCustomerStatement(customerId) {
     const events = [];
     if (openingOriginal) {
       events.push({
+        // date تاريخ العرض الفعلي (تاريخ إضافة العميل)، sortDate تاريخ ثابت قديم جداً يضمن ظهور "حساب قديم"
+        // كأول حركة زمنياً دائماً بدون أن يشوّه التاريخ المطبوع بالكشف
         date: customer.createdAt || new Date(0).toISOString(),
+        sortDate: new Date(0).toISOString(),
         label: 'حساب قديم',
         debit: openingOriginal > 0 ? openingOriginal : 0,
         credit: openingOriginal < 0 ? -openingOriginal : 0,
@@ -1624,7 +1706,7 @@ async function printCustomerStatement(customerId) {
     }));
     Object.values(batchedSale).forEach((b) => events.push({ date: b.date, label: 'دفعة مستلمة (تسديد مجمّع)', debit: 0, credit: b.amount }));
     Object.values(batchedPurchase).forEach((b) => events.push({ date: b.date, label: 'دفعة مسددة (تسديد مجمّع)', debit: b.amount, credit: 0 }));
-    events.sort((a, b) => new Date(a.date) - new Date(b.date));
+    events.sort((a, b) => new Date(a.sortDate || a.date) - new Date(b.sortDate || b.date));
 
     if (events.length === 0) return '';
 
@@ -1632,7 +1714,7 @@ async function printCustomerStatement(customerId) {
     events.forEach((e) => {
       rows += '<tr><td>' + formatDate(e.date, true) + '</td><td>' + esc(e.label) + '</td><td>' + (e.debit ? '<span class="amt-us">' + formatMoney(e.debit, cur) + '</span>' : '—') + '</td><td>' + (e.credit ? '<span class="amt-them">' + formatMoney(e.credit, cur) + '</span>' : '—') + '</td></tr>';
     });
-    const theyOweUs = sSales.reduce((s, i) => s + (i.total - i.paidAmount), 0) + (opening > 0 ? opening : 0);
+    const theyOweUs = sSales.reduce((s, i) => s + (i.total - i.paidAmount), 0) + (openingOriginal > 0 ? openingOriginal : 0);
 
     return (
       '<div class="doc-section-title">كشف حساب بـ' + currencyLabel(cur) + '</div>' +

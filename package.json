@@ -45,5 +45,8 @@
       "target": "AppImage",
       "icon": "assets/icon.png"
     }
+  },
+  "dependencies": {
+    "nodemailer": "^10.0.10"
   }
 }

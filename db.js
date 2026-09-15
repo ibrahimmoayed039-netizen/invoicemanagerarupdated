@@ -25,6 +25,17 @@ function defaultData() {
       purchaseInvoiceCounter: 0,
       autoBackupCustomDir: '',
       licenseKey: '',
+      // نسخة احتياطية يومية تلقائية عبر البريد الإلكتروني (اختيارية)
+      backupEmail: {
+        enabled: false,
+        to: '',
+        host: '',
+        port: 587,
+        secure: false,
+        user: '',
+        pass: '',
+        lastSentDate: '', // YYYY-MM-DD — آخر يوم أُرسلت فيه النسخة فعلياً، لمنع الإرسال أكثر من مرة في نفس اليوم
+      },
     },
     customers: [],
     saleInvoices: [],

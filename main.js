@@ -2,9 +2,11 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const db = require('./db');
 const license = require('./license');
+const nodemailer = require('nodemailer');
 
 let mainWindow = null;
 let licenseWatchTimer = null;
+let backupEmailWatchTimer = null;
 
 // منع فتح أكثر من نسخة من البرنامج في نفس الوقت — إذا حاول المستخدم فتحه مرة ثانية
 // (مثلاً بالنقر على الاختصار مرتين) نُظهر النافذة الموجودة بدل تشغيل عملية خلفية إضافية
@@ -53,6 +55,65 @@ function startLicenseWatch() {
   }, 60 * 60 * 1000); // كل ساعة
 }
 
+// ---------------- نسخة احتياطية يومية عبر البريد الإلكتروني ----------------
+function buildBackupJson() {
+  return JSON.stringify({
+    settings: db.getSettings(),
+    customers: db.listCustomers(),
+    saleInvoices: db.listSaleInvoices(),
+    purchaseInvoices: db.listPurchaseInvoices(),
+    payments: db.listPayments(),
+  }, null, 2);
+}
+
+function todayLocalDateStr() {
+  const d = new Date();
+  const tzOffsetMs = d.getTimezoneOffset() * 60000;
+  return new Date(d.getTime() - tzOffsetMs).toISOString().slice(0, 10);
+}
+
+// يُرسل نسخة احتياطية الآن عبر البريد باستخدام إعدادات SMTP المحفوظة — يُستخدم للجدولة اليومية وللإرسال التجريبي اليدوي كليهما
+async function sendBackupEmailNow() {
+  const cfg = (db.getSettings() || {}).backupEmail || {};
+  if (!cfg.to || !cfg.host || !cfg.user || !cfg.pass) {
+    return { ok: false, reason: 'missing_config' };
+  }
+  try {
+    const transporter = nodemailer.createTransport({
+      host: cfg.host,
+      port: Number(cfg.port) || 587,
+      secure: !!cfg.secure,
+      auth: { user: cfg.user, pass: cfg.pass },
+    });
+    const companyName = (db.getSettings() || {}).companyName || 'دفتر الفواتير';
+    const todayStr = todayLocalDateStr();
+    await transporter.sendMail({
+      from: cfg.user,
+      to: cfg.to,
+      subject: 'نسخة احتياطية يومية — ' + companyName + ' — ' + todayStr,
+      text: 'مرفق نسخة احتياطية تلقائية بتاريخ ' + todayStr + ' من برنامج ' + companyName + '.',
+      attachments: [{ filename: 'نسخة-احتياطية-' + todayStr + '.json', content: buildBackupJson() }],
+    });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: 'send_error', message: (e && e.message) || String(e) };
+  }
+}
+
+// يُرسَل تلقائياً مرة واحدة فقط في اليوم — يُفحص عند فتح البرنامج وكل ساعة أثناء بقائه مفتوحاً
+// (لا توجد طريقة لتشغيل هذا وقت أن البرنامج مغلق تماماً؛ سيُرسل أول مرة يُفتح بها البرنامج ذلك اليوم)
+async function maybeSendDailyBackupEmail() {
+  const cfg = (db.getSettings() || {}).backupEmail || {};
+  if (!cfg.enabled) return;
+  const today = todayLocalDateStr();
+  if (cfg.lastSentDate === today) return; // أُرسلت بالفعل اليوم
+  const result = await sendBackupEmailNow();
+  if (result.ok) {
+    db.updateSettings({ backupEmail: Object.assign({}, cfg, { lastSentDate: today }) });
+  }
+  // عند الفشل (مثلاً لا يوجد إنترنت حالياً) نُبقي lastSentDate كما هي لإعادة المحاولة عند الفحص التالي بنفس اليوم
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -80,6 +141,9 @@ if (gotSingleInstanceLock) {
     createWindow();
     loadAppropriateScreen();
     startLicenseWatch();
+    maybeSendDailyBackupEmail();
+    if (backupEmailWatchTimer) clearInterval(backupEmailWatchTimer);
+    backupEmailWatchTimer = setInterval(() => { maybeSendDailyBackupEmail(); }, 60 * 60 * 1000); // إعادة فحص كل ساعة (يفيد لو تجاوزنا منتصف الليل والبرنامج مفتوح، أو فشلت محاولة سابقة بسبب انقطاع الإنترنت)
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
@@ -92,6 +156,7 @@ if (gotSingleInstanceLock) {
 
 app.on('window-all-closed', () => {
   if (licenseWatchTimer) { clearInterval(licenseWatchTimer); licenseWatchTimer = null; }
+  if (backupEmailWatchTimer) { clearInterval(backupEmailWatchTimer); backupEmailWatchTimer = null; }
   if (process.platform !== 'darwin') {
     app.quit();
     // بعض العمليات الفرعية لـ Electron (كنافذة PDF الخفية أو محرّك العرض) قد تتأخر لحظات عن الإغلاق
@@ -103,6 +168,7 @@ app.on('window-all-closed', () => {
 // شبكة أمان إضافية: أي نافذة متبقية (مثل نافذة تصدير PDF الخفية) تُغلق قسراً قبل الخروج النهائي
 app.on('before-quit', () => {
   if (licenseWatchTimer) { clearInterval(licenseWatchTimer); licenseWatchTimer = null; }
+  if (backupEmailWatchTimer) { clearInterval(backupEmailWatchTimer); backupEmailWatchTimer = null; }
   BrowserWindow.getAllWindows().forEach((w) => { try { w.destroy(); } catch (_) {} });
 });
 
@@ -200,14 +266,7 @@ ipcMain.handle('backup:export', async () => {
   });
   if (result.canceled || !result.filePath) return { ok: false };
   const fs = require('fs');
-  const data = {
-    settings: db.getSettings(),
-    customers: db.listCustomers(),
-    saleInvoices: db.listSaleInvoices(),
-    purchaseInvoices: db.listPurchaseInvoices(),
-    payments: db.listPayments(),
-  };
-  fs.writeFileSync(result.filePath, JSON.stringify(data, null, 2), 'utf-8');
+  fs.writeFileSync(result.filePath, buildBackupJson(), 'utf-8');
   return { ok: true, path: result.filePath };
 });
 
@@ -276,6 +335,16 @@ ipcMain.handle('backup:chooseAutoFolder', async () => {
 ipcMain.handle('backup:clearAutoFolder', async () => {
   const settings = db.updateSettings({ autoBackupCustomDir: '' });
   return { ok: true, dir: db.getAutoBackupDir(), settings };
+});
+
+// إرسال فوري (يدوي/تجريبي) عبر البريد باستخدام إعدادات SMTP المحفوظة حالياً — بدون انتظار الجدولة اليومية
+ipcMain.handle('backup:sendEmailNow', async () => {
+  const result = await sendBackupEmailNow();
+  if (result.ok) {
+    const cfg = (db.getSettings() || {}).backupEmail || {};
+    db.updateSettings({ backupEmail: Object.assign({}, cfg, { lastSentDate: todayLocalDateStr() }) });
+  }
+  return result;
 });
 
 // ---------------- IPC: تصدير مستند حالي كملف PDF ----------------
