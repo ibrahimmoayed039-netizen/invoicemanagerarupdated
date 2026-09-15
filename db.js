@@ -53,6 +53,10 @@ function init(userDataPath) {
         // رصيد سابق مستقل بالدولار (حساب دولار منفصل تماماً عن حساب الدينار، بدون أي تحويل بينهما)
         if (c.openingBalanceUsd === undefined) c.openingBalanceUsd = 0;
         if (c.dealsInUsd === undefined) c.dealsInUsd = false;
+        // توافق مع بيانات أقدم لا تحتوي القيمة الأصلية للرصيد القديم — أفضل تقدير متاح هو المتبقي الحالي
+        // (لا يمكن استرجاع رصيد سُدد بالكامل قبل هذا التحديث، لكن هذا يمنع فقدان أي بيانات مستقبلاً)
+        if (c.openingBalanceOriginal === undefined) c.openingBalanceOriginal = c.openingBalance;
+        if (c.openingBalanceUsdOriginal === undefined) c.openingBalanceUsdOriginal = c.openingBalanceUsd;
       });
       if (!cache.saleInvoices) cache.saleInvoices = [];
       if (!cache.purchaseInvoices) cache.purchaseInvoices = [];
@@ -157,9 +161,14 @@ function addCustomer(data) {
     address: (data.address || '').trim(),
     notes: (data.notes || '').trim(),
     // رصيد سابق بالدينار (حساب قديم): موجب = دين قديم على العميل لصالحنا، سالب = دين علينا له
+    // هذه القيمة تتغيّر لاحقاً كلما سُدد جزء من الرصيد القديم (تمثّل "المتبقي")
     openingBalance: Number(data.openingBalance) || 0,
+    // القيمة الأصلية للرصيد القديم كما أُدخلت عند إنشاء العميل — لا تتغيّر أبداً بعد ذلك،
+    // وتُستخدم فقط لعرض بند "حساب قديم" في كشف الحساب حتى بعد تسديده بالكامل
+    openingBalanceOriginal: Number(data.openingBalance) || 0,
     // رصيد سابق بالدولار: حساب مستقل تماماً عن حساب الدينار أعلاه، بدون أي تحويل تلقائي بينهما
     openingBalanceUsd: Number(data.openingBalanceUsd) || 0,
+    openingBalanceUsdOriginal: Number(data.openingBalanceUsd) || 0,
     // هل يتعامل هذا العميل بالدولار بشكل معتاد (يُستخدم لاقتراح عملة الدولار كافتراضي عند إنشاء فاتورة جديدة)
     dealsInUsd: !!data.dealsInUsd,
     createdAt: nowIso(),
@@ -177,7 +186,9 @@ function updateCustomer(id, patch) {
     address: patch.address !== undefined ? patch.address.trim() : c.address,
     notes: patch.notes !== undefined ? patch.notes.trim() : c.notes,
     openingBalance: patch.openingBalance !== undefined ? (Number(patch.openingBalance) || 0) : (c.openingBalance || 0),
+    openingBalanceOriginal: patch.openingBalance !== undefined ? (Number(patch.openingBalance) || 0) : (c.openingBalanceOriginal || 0),
     openingBalanceUsd: patch.openingBalanceUsd !== undefined ? (Number(patch.openingBalanceUsd) || 0) : (c.openingBalanceUsd || 0),
+    openingBalanceUsdOriginal: patch.openingBalanceUsd !== undefined ? (Number(patch.openingBalanceUsd) || 0) : (c.openingBalanceUsdOriginal || 0),
     dealsInUsd: patch.dealsInUsd !== undefined ? !!patch.dealsInUsd : !!c.dealsInUsd,
   });
   persist();
@@ -301,6 +312,34 @@ function listPayments() {
   return cache.payments.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
+// تسديد (كلي أو جزئي) للرصيد القديم (الحساب السابق) — على عكس التعديل اليدوي من نموذج بيانات العميل،
+// هذا يسجّل "حركة" فعلية في سجل الدفعات، حتى يبقى أثرها ظاهراً في كشف حساب العميل حتى بعد تسديد الرصيد بالكامل
+function settleOpeningBalance(customerId, currency, amount, date, notes, batchId) {
+  const c = getCustomer(customerId);
+  if (!c) return { ok: false, reason: 'customer_not_found' };
+  const field = currency === 'USD' ? 'openingBalanceUsd' : 'openingBalance';
+  const amt = Number(amount) || 0;
+  if (amt <= 0) return { ok: false, reason: 'invalid_amount' };
+  const newBalance = (Number(c[field]) || 0) - amt;
+  c[field] = newBalance;
+  const payment = {
+    id: uid('pay'),
+    invoiceId: null,
+    invoiceType: 'opening',
+    invoiceNumber: null,
+    customerId,
+    amount: amt,
+    currency: currency === 'USD' ? 'USD' : 'IQD',
+    date: date || nowIso(),
+    notes: notes || '',
+    batchId: batchId || null,
+    createdAt: nowIso(),
+  };
+  cache.payments.push(payment);
+  persist();
+  return { ok: true, payment, customer: c };
+}
+
 // ---------- المستحقات ----------
 // كل عميل له حسابان مستقلان تماماً: بالدينار (theyOweUs/weOweThem) وبالدولار (theyOweUsUsd/weOweThemUsd)
 function getDuesSummary() {
@@ -364,14 +403,23 @@ function getHistory() {
     });
   }
   for (const p of cache.payments) {
+    let kind = 'purchase_payment';
+    let label = 'دفعة على فاتورة شراء ' + p.invoiceNumber;
+    if (p.invoiceType === 'sale') {
+      kind = 'sale_payment';
+      label = 'دفعة على فاتورة بيع ' + p.invoiceNumber;
+    } else if (p.invoiceType === 'opening') {
+      kind = 'opening_payment';
+      label = 'تسديد رصيد قديم';
+    }
     events.push({
-      kind: p.invoiceType === 'sale' ? 'sale_payment' : 'purchase_payment',
+      kind,
       id: p.id,
       date: p.date,
       customerId: p.customerId,
       amount: p.amount,
       currency: p.currency || 'IQD',
-      label: (p.invoiceType === 'sale' ? 'دفعة على فاتورة بيع ' : 'دفعة على فاتورة شراء ') + p.invoiceNumber,
+      label,
     });
   }
   events.sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -393,6 +441,8 @@ function restoreAll(data) {
     if (c.openingBalance === undefined) c.openingBalance = 0;
     if (c.openingBalanceUsd === undefined) c.openingBalanceUsd = 0;
     if (c.dealsInUsd === undefined) c.dealsInUsd = false;
+    if (c.openingBalanceOriginal === undefined) c.openingBalanceOriginal = c.openingBalance;
+    if (c.openingBalanceUsdOriginal === undefined) c.openingBalanceUsdOriginal = c.openingBalanceUsd;
   });
   next.saleInvoices.forEach((i) => { if (i.currency !== 'USD') i.currency = 'IQD'; });
   next.purchaseInvoices.forEach((i) => { if (i.currency !== 'USD') i.currency = 'IQD'; });
@@ -445,6 +495,7 @@ module.exports = {
   deleteInvoice,
   addPayment,
   listPayments,
+  settleOpeningBalance,
   getDuesSummary,
   getHistory,
   getDashboardSummary,

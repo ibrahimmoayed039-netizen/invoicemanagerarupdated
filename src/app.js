@@ -473,9 +473,7 @@ async function quickSettleForCustomer(customerId, onDone) {
         if (remaining <= 0.001) continue;
         const applied = Math.min(leftover, remaining);
         if (item.type === 'opening') {
-          const field = currency === 'USD' ? 'openingBalanceUsd' : 'openingBalance';
-          const newBalance = (Number(item.customer[field]) || 0) - applied;
-          await window.api.customers.update(item.customer.id, { [field]: newBalance });
+          await window.api.payments.settleOpening(item.customer.id, currency, applied, paymentDate, notes, batchId);
         } else {
           await window.api.payments.add({
             invoiceId: item.inv.id,
@@ -551,8 +549,7 @@ function openOpeningBalanceSettleForm(customer, currency, onDone) {
     el('button', { class: 'btn btn-primary', onclick: async () => {
       const result = amountBlock.getResult();
       if (!result) { toast('أدخل مبلغاً صحيحاً', true); return; }
-      const newBalance = (Number(customer[field]) || 0) - result.amount;
-      await window.api.customers.update(customer.id, { [field]: newBalance });
+      await window.api.payments.settleOpening(customer.id, cur, result.amount, new Date().toISOString(), '');
       closeModal();
       toast('تم تسجيل تسديد الرصيد السابق');
       if (onDone) onDone();
@@ -599,11 +596,19 @@ async function openCustomerProfile(id) {
 // يبني سجل حركات العميل لعملة واحدة فقط (حساب قديم + فواتير بيع + تسديدات من نفس العملة) مرتباً بالتاريخ مع إجمالي متحرك
 function buildCustomerLedger(customer, sales, payments, currency) {
   const cur = currency === 'USD' ? 'USD' : 'IQD';
-  const opening = cur === 'USD' ? (Number(customer && customer.openingBalanceUsd) || 0) : (Number(customer && customer.openingBalance) || 0);
+  // القيمة الأصلية للرصيد القديم (لا تتغيّر عند التسديد) — تُستخدم لعرض بند "حساب قديم" حتى بعد تسديده بالكامل
+  const openingOriginal = cur === 'USD'
+    ? (Number(customer && (customer.openingBalanceUsdOriginal !== undefined ? customer.openingBalanceUsdOriginal : customer.openingBalanceUsd)) || 0)
+    : (Number(customer && (customer.openingBalanceOriginal !== undefined ? customer.openingBalanceOriginal : customer.openingBalance)) || 0);
   const events = [];
-  if (opening) {
-    events.push({ date: (customer && customer.createdAt) || new Date(0).toISOString(), label: 'حساب قديم', amount: opening });
+  if (openingOriginal) {
+    events.push({ date: (customer && customer.createdAt) || new Date(0).toISOString(), label: 'حساب قديم', amount: openingOriginal });
   }
+  // تسديدات الرصيد القديم (حركات مستقلة تُسجَّل عند التسديد، ولا تُحذف عند اكتمال السداد)
+  const openingPayments = payments.filter((p) => p.invoiceType === 'opening' && (p.currency === 'USD' ? 'USD' : 'IQD') === cur);
+  openingPayments.forEach((p) => {
+    events.push({ date: p.date, label: 'تسديد رصيد قديم', amount: -(Number(p.amount) || 0) });
+  });
   const salesInCur = sales.filter((i) => (i.currency === 'USD' ? 'USD' : 'IQD') === cur);
   salesInCur.forEach((i) => {
     events.push({ date: i.date, label: 'فاتورة بيع ' + i.number, amount: i.total });
@@ -1013,6 +1018,7 @@ async function renderHistory(area) {
     el('option', { value: 'purchase_invoice' }, ['فواتير الشراء']),
     el('option', { value: 'sale_payment' }, ['دفعات البيع']),
     el('option', { value: 'purchase_payment' }, ['دفعات الشراء']),
+    el('option', { value: 'opening_payment' }, ['تسديدات الرصيد القديم']),
   ]);
   const custFilter = el('select', { class: 'input' }, [el('option', { value: '' }, ['كل العملاء'])]);
   customers.forEach((c) => custFilter.appendChild(el('option', { value: c.id }, [c.name])));
@@ -1030,6 +1036,7 @@ async function renderHistory(area) {
   const KIND_LABEL = {
     sale_invoice: 'فاتورة بيع', purchase_invoice: 'فاتورة شراء',
     sale_payment: 'دفعة بيع', purchase_payment: 'دفعة شراء',
+    opening_payment: 'تسديد رصيد قديم',
   };
 
   function filtered() {
@@ -1487,18 +1494,28 @@ async function printCustomerStatement(customerId) {
     const inCur = (x) => (x.currency === 'USD' ? 'USD' : 'IQD') === cur;
     const sSales = mySales.filter(inCur);
     const sPurchases = myPurchases.filter(inCur);
-    const sPayments = myPayments.filter(inCur);
-    const opening = cur === 'USD' ? (Number(customer.openingBalanceUsd) || 0) : (Number(customer.openingBalance) || 0);
+    // تُستبعد هنا تسديدات الرصيد القديم (invoiceType: 'opening')؛ تُعالَج بشكل منفصل أدناه حتى لا تظهر كدفعة فاتورة
+    const sPayments = myPayments.filter(inCur).filter((p) => p.invoiceType !== 'opening');
+    const sOpeningPayments = myPayments.filter(inCur).filter((p) => p.invoiceType === 'opening');
+    // القيمة الأصلية للرصيد القديم — تبقى تظهر في الكشف حتى بعد تسديدها بالكامل
+    const openingOriginal = cur === 'USD'
+      ? (Number(customer.openingBalanceUsdOriginal !== undefined ? customer.openingBalanceUsdOriginal : customer.openingBalanceUsd) || 0)
+      : (Number(customer.openingBalanceOriginal !== undefined ? customer.openingBalanceOriginal : customer.openingBalance) || 0);
 
     const events = [];
-    if (opening) {
+    if (openingOriginal) {
       events.push({
         date: customer.createdAt || new Date(0).toISOString(),
         label: 'حساب قديم',
-        debit: opening > 0 ? opening : 0,
-        credit: opening < 0 ? -opening : 0,
+        debit: openingOriginal > 0 ? openingOriginal : 0,
+        credit: openingOriginal < 0 ? -openingOriginal : 0,
       });
     }
+    sOpeningPayments.forEach((p) => {
+      // تسديد رصيد قديم مستحق لنا (موجب) هو "دفعة مستلمة"؛ تسديد رصيد مستحق علينا (سالب) هو "دفعة مسددة"
+      const isReceivable = openingOriginal >= 0;
+      events.push({ date: p.date, label: 'تسديد رصيد قديم', debit: isReceivable ? 0 : p.amount, credit: isReceivable ? p.amount : 0 });
+    });
     sSales.forEach((i) => {
       events.push({ date: i.date, label: 'فاتورة بيع ' + i.number, debit: i.total, credit: 0 });
       const paidViaPayments = sPayments.filter((p) => p.invoiceType === 'sale' && p.invoiceId === i.id).reduce((s, p) => s + (Number(p.amount) || 0), 0);
@@ -1561,7 +1578,7 @@ async function printCustomerStatement(customerId) {
 
 function printHistoryReport(list) {
   let rows = '';
-  const KIND_LABEL = { sale_invoice: 'فاتورة بيع', purchase_invoice: 'فاتورة شراء', sale_payment: 'دفعة بيع', purchase_payment: 'دفعة شراء' };
+  const KIND_LABEL = { sale_invoice: 'فاتورة بيع', purchase_invoice: 'فاتورة شراء', sale_payment: 'دفعة بيع', purchase_payment: 'دفعة شراء', opening_payment: 'تسديد رصيد قديم' };
   list.forEach((h) => {
     rows += '<tr><td>' + formatDate(h.date, true) + '</td><td>' + esc(customerName(h.customerId)) + '</td><td>' + (KIND_LABEL[h.kind] || h.kind) + '</td><td>' + formatMoney(h.amount, h.currency) + '</td></tr>';
   });

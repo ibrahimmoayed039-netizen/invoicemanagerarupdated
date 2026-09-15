@@ -22,7 +22,6 @@
       "main.js",
       "preload.js",
       "db.js",
-      "license.js",
       "src/**/*",
       "assets/**/*"
     ],

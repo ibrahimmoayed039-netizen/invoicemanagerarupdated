@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('api', {
   payments: {
     add: (data) => ipcRenderer.invoke('payments:add', data),
     list: () => ipcRenderer.invoke('payments:list'),
+    settleOpening: (customerId, currency, amount, date, notes, batchId) => ipcRenderer.invoke('payments:settleOpening', customerId, currency, amount, date, notes, batchId),
   },
   dues: {
     summary: () => ipcRenderer.invoke('dues:summary'),

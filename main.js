@@ -136,6 +136,7 @@ ipcMain.handle('invoices:delete', (e, type, id) => db.deleteInvoice(type, id));
 // ---------------- IPC: الدفعات / المستحقات ----------------
 ipcMain.handle('payments:add', (e, data) => db.addPayment(data));
 ipcMain.handle('payments:list', () => db.listPayments());
+ipcMain.handle('payments:settleOpening', (e, customerId, currency, amount, date, notes, batchId) => db.settleOpeningBalance(customerId, currency, amount, date, notes, batchId));
 ipcMain.handle('dues:summary', () => db.getDuesSummary());
 
 // ---------------- IPC: السجل ولوحة التحكم ----------------
