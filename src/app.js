@@ -115,6 +115,51 @@ function formatMoney(n, currency) {
   const label = (STATE.settings && STATE.settings.currency) || '';
   return numStr + ' ' + label;
 }
+// ---------------- واتساب: إرسال كشف الحساب مباشرة للعميل ----------------
+// يحوّل رقم الهاتف المحلي (مهما كانت صيغته) إلى صيغة دولية عراقية (964) بدون '+' أو أصفار زائدة،
+// كما يتطلبها رابط wa.me
+function normalizeIraqPhoneForWhatsapp(rawPhone) {
+  let digits = String(rawPhone || '').replace(/[^\d]/g, '');
+  if (!digits) return null;
+  if (digits.startsWith('00964')) digits = digits.slice(2); // 00964xxxxxxxxxx -> 964xxxxxxxxxx
+  else if (digits.startsWith('964')) { /* بالفعل بالصيغة الدولية */ }
+  else if (digits.startsWith('0')) digits = '964' + digits.slice(1); // 07xxxxxxxxx -> 9647xxxxxxxxx
+  else digits = '964' + digits; // 7xxxxxxxxx بدون صفر أو رمز دولة -> إضافة رمز العراق
+  // رقم عراقي كامل بصيغة 964 + 10 أرقام = 13 رقماً على الأقل بشكل معقول
+  if (digits.length < 12 || digits.length > 15) return null;
+  return digits;
+}
+
+function buildCustomerStatementMessage(customer, balIqd, balUsd) {
+  const companyName = (STATE.settings && STATE.settings.companyName) || '';
+  const lines = [];
+  lines.push('كشف حساب' + (companyName ? ' — ' + companyName : ''));
+  lines.push('العميل: ' + (customer.name || ''));
+  lines.push('');
+  const addBalanceLine = (bal, cur) => {
+    if (Math.abs(bal) < 0.001) return;
+    const who = bal > 0 ? 'المبلغ المستحق لنا' : 'المبلغ المستحق لكم';
+    lines.push(who + ' بـ' + currencyLabel(cur) + ': ' + formatMoney(Math.abs(bal), cur));
+  };
+  addBalanceLine(balIqd, 'IQD');
+  addBalanceLine(balUsd, 'USD');
+  if (Math.abs(balIqd) < 0.001 && Math.abs(balUsd) < 0.001) {
+    lines.push('الحساب مسدد بالكامل، لا يوجد أي مبلغ مستحق. شكراً لتعاملكم معنا.');
+  } else {
+    lines.push('');
+    lines.push('نرجو مراجعة كشف الحساب أعلاه، ولأي استفسار نحن بالخدمة.');
+  }
+  return lines.join('\n');
+}
+
+async function sendCustomerStatementViaWhatsapp(customer, balIqd, balUsd) {
+  const phone = normalizeIraqPhoneForWhatsapp(customer.phone);
+  if (!phone) { toast('لا يوجد رقم هاتف صحيح مسجّل لهذا العميل', true); return; }
+  const text = buildCustomerStatementMessage(customer, balIqd, balUsd);
+  const url = 'https://wa.me/' + phone + '?text=' + encodeURIComponent(text);
+  await window.api.system.openExternal(url);
+}
+
 function formatDate(iso, withTime) {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -588,6 +633,7 @@ async function openCustomerProfile(id) {
   ]);
   const footer = [
     el('button', { class: 'btn btn-primary', onclick: () => { closeModal(); printCustomerStatement(customer.id); } }, ['🖨 طباعة كشف حساب']),
+    el('button', { class: 'btn btn-ghost', onclick: () => sendCustomerStatementViaWhatsapp(customer, balIqd, balUsd) }, ['💬 إرسال عبر واتساب']),
     el('button', { class: 'btn btn-ghost', onclick: closeModal }, ['إغلاق']),
   ];
   openModal('ملف العميل: ' + customer.name, body, footer, true);

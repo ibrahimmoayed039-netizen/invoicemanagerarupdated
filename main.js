@@ -6,6 +6,20 @@ const license = require('./license');
 let mainWindow = null;
 let licenseWatchTimer = null;
 
+// منع فتح أكثر من نسخة من البرنامج في نفس الوقت — إذا حاول المستخدم فتحه مرة ثانية
+// (مثلاً بالنقر على الاختصار مرتين) نُظهر النافذة الموجودة بدل تشغيل عملية خلفية إضافية
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
 function currentLicenseStatus() {
   const status = license.checkStoredLicense(db);
   return {
@@ -60,22 +74,36 @@ function createWindow() {
   // الشاشة المناسبة (تفعيل أو الواجهة الرئيسية) تُحمَّل عبر loadAppropriateScreen() بعد الإنشاء
 }
 
-app.whenReady().then(() => {
-  db.init(app.getPath('userData'));
-  createWindow();
-  loadAppropriateScreen();
-  startLicenseWatch();
+if (gotSingleInstanceLock) {
+  app.whenReady().then(() => {
+    db.init(app.getPath('userData'));
+    createWindow();
+    loadAppropriateScreen();
+    startLicenseWatch();
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-      loadAppropriateScreen();
-    }
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+        loadAppropriateScreen();
+      }
+    });
   });
-});
+}
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  if (licenseWatchTimer) { clearInterval(licenseWatchTimer); licenseWatchTimer = null; }
+  if (process.platform !== 'darwin') {
+    app.quit();
+    // بعض العمليات الفرعية لـ Electron (كنافذة PDF الخفية أو محرّك العرض) قد تتأخر لحظات عن الإغلاق
+    // التلقائي؛ هذا يضمن إنهاء العملية فعلياً في الخلفية بدل أن تبقى عالقة بعد إغلاق النافذة الظاهرة
+    setTimeout(() => { app.exit(0); }, 1500);
+  }
+});
+
+// شبكة أمان إضافية: أي نافذة متبقية (مثل نافذة تصدير PDF الخفية) تُغلق قسراً قبل الخروج النهائي
+app.on('before-quit', () => {
+  if (licenseWatchTimer) { clearInterval(licenseWatchTimer); licenseWatchTimer = null; }
+  BrowserWindow.getAllWindows().forEach((w) => { try { w.destroy(); } catch (_) {} });
 });
 
 // ---------------- IPC: روابط خارجية (اتصال / واتساب) ----------------
