@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">دفتر الفواتير</string>
+    <string name="nav_customers">العملاء</string>
+    <string name="nav_invoices">الفواتير</string>
+    <string name="nav_settlements">التسديد</string>
+    <string name="nav_settings">الإعدادات</string>
+</resources>

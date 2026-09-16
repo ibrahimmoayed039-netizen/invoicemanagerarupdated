@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.InvoiceManager" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#2F6F5E</item>
+        <item name="colorPrimaryVariant">#234F42</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+    </style>
+</resources>

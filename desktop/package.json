@@ -1,0 +1,52 @@
+{
+  "name": "invoice-manager-ar",
+  "version": "1.0.0",
+  "description": "برنامج سطح مكتب عربي لإدارة العملاء وفواتير الشراء والبيع والمستحقات",
+  "main": "main.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^31.3.1",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.example.invoicemanagerar",
+    "productName": "إدارة الفواتير",
+    "files": [
+      "main.js",
+      "preload.js",
+      "db.js",
+      "license.js",
+      "src/**/*",
+      "assets/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/icon.png"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "assets/icon.png"
+    }
+  },
+  "dependencies": {
+    "nodemailer": "^10.0.10"
+  }
+}
