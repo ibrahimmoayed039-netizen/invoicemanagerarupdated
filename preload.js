@@ -56,5 +56,6 @@ contextBridge.exposeInMainWorld('api', {
     chooseAutoFolder: () => ipcRenderer.invoke('backup:chooseAutoFolder'),
     clearAutoFolder: () => ipcRenderer.invoke('backup:clearAutoFolder'),
     sendEmailNow: () => ipcRenderer.invoke('backup:sendEmailNow'),
+    uploadNow: () => ipcRenderer.invoke('backup:uploadNow'),
   },
 });

@@ -297,6 +297,19 @@ tbody tr:hover { background: #FBFAF6; }
 .badge-invoice { background: var(--owed-to-us-tint); color: var(--owed-to-us); }
 .badge-payment { background: var(--primary-tint); color: var(--primary-dark); }
 
+/* تلوين خفيف لصفوف دفتر حساب العميل حسب نوع الحركة — لتسهيل القراءة والتمييز بسرعة
+   بين "فاتورة بيع" (تزيد المستحق) و "تسديد" (يقلّل المستحق) و "حساب قديم" */
+.ledger-table tbody tr.ledger-row-invoice { background: var(--owed-to-us-tint); }
+.ledger-table tbody tr.ledger-row-payment { background: var(--primary-tint); }
+.ledger-table tbody tr.ledger-row-opening { background: #EDEAE0; }
+.ledger-table tbody tr.ledger-row-invoice:hover,
+.ledger-table tbody tr.ledger-row-payment:hover,
+.ledger-table tbody tr.ledger-row-opening:hover { filter: brightness(0.97); }
+/* نفس منطق التلوين على صفوف قائمة الفواتير الرئيسية، حسب حالة السداد */
+.invoices-table tbody tr.row-status-paid { background: var(--primary-tint); }
+.invoices-table tbody tr.row-status-partial { background: var(--owed-by-us-tint); }
+.invoices-table tbody tr.row-status-unpaid { background: var(--owed-to-us-tint); }
+
 tfoot td {
   padding: 11px 14px;
   font-size: 13px;
@@ -305,6 +318,11 @@ tfoot td {
   border-top: 2px solid var(--border);
 }
 .ledger-totals-row td:first-child { color: var(--ink-muted); font-weight: 600; }
+
+/* نفس التلوين بكشف الحساب المطبوع (PDF/طباعة) */
+.doc-table tbody tr.doc-row-debit { background: var(--owed-to-us-tint); }
+.doc-table tbody tr.doc-row-credit { background: var(--primary-tint); }
+.doc-table tbody tr.doc-row-opening { background: #EDEAE0; }
 
 /* ---------------- أدوات فلترة ---------------- */
 .toolbar {

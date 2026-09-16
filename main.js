@@ -114,6 +114,43 @@ async function maybeSendDailyBackupEmail() {
   // عند الفشل (مثلاً لا يوجد إنترنت حالياً) نُبقي lastSentDate كما هي لإعادة المحاولة عند الفحص التالي بنفس اليوم
 }
 
+// يرفع نسخة احتياطية (JSON) الآن عبر طلب HTTP POST لأي رابط يحدده المستخدم (Webhook أو رابط استقبال ملفات،
+// مثل Google Apps Script Web App مربوط بمجلد Google Drive) — يُستخدم للجدولة اليومية وللرفع التجريبي اليدوي كليهما
+async function uploadBackupNow() {
+  const cfg = (db.getSettings() || {}).backupUpload || {};
+  if (!cfg.url) return { ok: false, reason: 'missing_config' };
+  try {
+    const companyName = (db.getSettings() || {}).companyName || 'دفتر الفواتير';
+    const todayStr = todayLocalDateStr();
+    const res = await fetch(cfg.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filename: 'نسخة-احتياطية-' + companyName + '-' + todayStr + '.json',
+        companyName,
+        date: todayStr,
+        backup: JSON.parse(buildBackupJson()),
+      }),
+    });
+    if (!res.ok) return { ok: false, reason: 'send_error', message: 'HTTP ' + res.status };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: 'send_error', message: (e && e.message) || String(e) };
+  }
+}
+
+// نفس منطق الإرسال اليومي بالبريد، لكن للرفع عبر الرابط
+async function maybeUploadDailyBackup() {
+  const cfg = (db.getSettings() || {}).backupUpload || {};
+  if (!cfg.enabled) return;
+  const today = todayLocalDateStr();
+  if (cfg.lastSentDate === today) return; // رُفعت بالفعل اليوم
+  const result = await uploadBackupNow();
+  if (result.ok) {
+    db.updateSettings({ backupUpload: Object.assign({}, cfg, { lastSentDate: today }) });
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -142,8 +179,9 @@ if (gotSingleInstanceLock) {
     loadAppropriateScreen();
     startLicenseWatch();
     maybeSendDailyBackupEmail();
+    maybeUploadDailyBackup();
     if (backupEmailWatchTimer) clearInterval(backupEmailWatchTimer);
-    backupEmailWatchTimer = setInterval(() => { maybeSendDailyBackupEmail(); }, 60 * 60 * 1000); // إعادة فحص كل ساعة (يفيد لو تجاوزنا منتصف الليل والبرنامج مفتوح، أو فشلت محاولة سابقة بسبب انقطاع الإنترنت)
+    backupEmailWatchTimer = setInterval(() => { maybeSendDailyBackupEmail(); maybeUploadDailyBackup(); }, 60 * 60 * 1000); // إعادة فحص كل ساعة (يفيد لو تجاوزنا منتصف الليل والبرنامج مفتوح، أو فشلت محاولة سابقة بسبب انقطاع الإنترنت)
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
@@ -343,6 +381,16 @@ ipcMain.handle('backup:sendEmailNow', async () => {
   if (result.ok) {
     const cfg = (db.getSettings() || {}).backupEmail || {};
     db.updateSettings({ backupEmail: Object.assign({}, cfg, { lastSentDate: todayLocalDateStr() }) });
+  }
+  return result;
+});
+
+// رفع فوري (يدوي/تجريبي) عبر الرابط المحفوظ حالياً — بدون انتظار الجدولة اليومية
+ipcMain.handle('backup:uploadNow', async () => {
+  const result = await uploadBackupNow();
+  if (result.ok) {
+    const cfg = (db.getSettings() || {}).backupUpload || {};
+    db.updateSettings({ backupUpload: Object.assign({}, cfg, { lastSentDate: todayLocalDateStr() }) });
   }
   return result;
 });

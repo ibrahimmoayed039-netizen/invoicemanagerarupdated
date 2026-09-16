@@ -708,17 +708,17 @@ function buildCustomerLedger(customer, sales, payments, currency) {
 }
 
 const LEDGER_KIND_BADGE = {
-  opening: { label: 'حساب قديم', cls: 'badge-neutral' },
-  invoice: { label: 'فاتورة بيع', cls: 'badge-invoice' },
-  payment: { label: 'تسديد', cls: 'badge-payment' },
+  opening: { label: 'حساب قديم', cls: 'badge-neutral', row: 'ledger-row-opening' },
+  invoice: { label: 'فاتورة بيع', cls: 'badge-invoice', row: 'ledger-row-invoice' },
+  payment: { label: 'تسديد', cls: 'badge-payment', row: 'ledger-row-payment' },
 };
 
 function customerLedgerTable(events, currency) {
   if (events.length === 0) return emptyState('لا توجد حركات بعد', 'لا توجد حركات بهذه العملة لهذا العميل بعد.');
   const wrap = el('div', { class: 'table-wrap' });
-  const table = el('table', {}, [el('thead', {}, [el('tr', {}, [
+  const table = el('table', { class: 'ledger-table' }, [el('thead', {}, [el('tr', {}, [
     el('th', {}, ['التاريخ']), el('th', {}, ['النوع']), el('th', {}, ['البيان']),
-    el('th', {}, ['مدين (له)']), el('th', {}, ['دائن (عليه)']), el('th', {}, ['الرصيد بعدها']),
+    el('th', {}, ['قوائم البيع']), el('th', {}, ['قوائم تسديد']), el('th', {}, ['الرصيد بعدها']),
   ])])]);
   const tbody = el('tbody');
   let totalDebit = 0, totalCredit = 0;
@@ -727,7 +727,7 @@ function customerLedgerTable(events, currency) {
     const credit = e.amount < 0 ? -e.amount : 0;
     totalDebit += debit; totalCredit += credit;
     const badge = LEDGER_KIND_BADGE[e.kind] || LEDGER_KIND_BADGE.payment;
-    tbody.appendChild(el('tr', {}, [
+    tbody.appendChild(el('tr', { class: badge.row }, [
       el('td', {}, [formatDate(e.date, true)]),
       el('td', {}, [el('span', { class: 'badge ' + badge.cls }, [badge.label])]),
       el('td', {}, [e.label]),
@@ -861,7 +861,7 @@ async function renderInvoices(area, type) {
     const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
     if (invoicesPage > totalPages) invoicesPage = totalPages;
     const pageList = list.slice((invoicesPage - 1) * PAGE_SIZE, invoicesPage * PAGE_SIZE);
-    const table = el('table', {}, [el('thead', {}, [el('tr', {}, [
+    const table = el('table', { class: 'invoices-table' }, [el('thead', {}, [el('tr', {}, [
       el('th', {}, ['رقم الفاتورة']), el('th', {}, ['العميل']), el('th', {}, ['التاريخ']), el('th', {}, ['العملة']),
       el('th', {}, ['الإجمالي']), el('th', {}, ['المتبقي']), el('th', {}, ['الحالة']), el('th', {}, ['إجراءات']),
     ])])]);
@@ -875,7 +875,7 @@ async function renderInvoices(area, type) {
       ];
       if (s !== 'paid') actions.push(['تسديد', () => openPaymentForm(type, inv)]);
       actions.push(['حذف', () => deleteInvoiceRow(type, inv.id)]);
-      tbody.appendChild(el('tr', {}, [
+      tbody.appendChild(el('tr', { class: 'row-status-' + s }, [
         el('td', {}, [inv.number]),
         el('td', {}, [customerName(inv.customerId)]),
         el('td', {}, [formatDate(inv.date, true)]),
@@ -1341,76 +1341,58 @@ async function renderSettings(area) {
   }
   area.appendChild(autoActions);
 
-  // ---- نسخة احتياطية يومية عبر البريد الإلكتروني ----
-  const emailCfg = Object.assign({ enabled: false, to: '', host: '', port: 587, secure: false, user: '', pass: '', lastSentDate: '' }, settings.backupEmail || {});
-  area.appendChild(el('div', { class: 'section-title' }, ['نسخة احتياطية يومية عبر البريد الإلكتروني']));
+  // ---- رفع تلقائي للنسخة الاحتياطية عبر رابط (Webhook) ----
+  const uploadCfg = Object.assign({ enabled: false, url: '', lastSentDate: '' }, settings.backupUpload || {});
+  area.appendChild(el('div', { class: 'section-title' }, ['رفع تلقائي للنسخة الاحتياطية عبر رابط']));
   area.appendChild(el('div', { class: 'field-hint' }, [
-    'يرسل البرنامج نسخة احتياطية (JSON) تلقائياً مرة واحدة يومياً إلى البريد المحدّد أدناه — أول مرة يُفتح بها البرنامج في ذلك اليوم (لا يعمل والبرنامج مغلق تماماً). لحسابات Gmail يلزم إنشاء "كلمة مرور تطبيق" بدل كلمة المرور العادية.',
+    'يرسل البرنامج نسخة احتياطية (JSON) تلقائياً مرة واحدة يومياً كطلب POST إلى الرابط المحدد أدناه — أول مرة يُفتح بها البرنامج في ذلك اليوم. يصلح لأي رابط استقبال ملفات (Webhook)، بما في ذلك رابط "Google Apps Script Web App" مربوط بمجلد Google Drive.',
   ]));
-  const emailEnabledInput = el('input', { type: 'checkbox', id: 'backupEmailEnabled', checked: emailCfg.enabled ? 'checked' : undefined });
-  const emailToInput = el('input', { class: 'input', type: 'email', placeholder: 'example@gmail.com', value: emailCfg.to });
-  const emailHostInput = el('input', { class: 'input', placeholder: 'smtp.gmail.com', value: emailCfg.host });
-  const emailPortInput = el('input', { class: 'input', type: 'number', placeholder: '587', value: emailCfg.port || 587 });
-  const emailSecureInput = el('input', { type: 'checkbox', id: 'backupEmailSecure', checked: emailCfg.secure ? 'checked' : undefined });
-  const emailUserInput = el('input', { class: 'input', type: 'email', placeholder: 'البريد المرسِل — example@gmail.com', value: emailCfg.user });
-  const emailPassInput = el('input', { class: 'input', type: 'password', placeholder: 'كلمة المرور / كلمة مرور التطبيق', value: emailCfg.pass });
-
-  const emailGrid = el('div', { class: 'form-grid' }, [
+  const uploadEnabledInput = el('input', { type: 'checkbox', id: 'backupUploadEnabled', checked: uploadCfg.enabled ? 'checked' : undefined });
+  const uploadUrlInput = el('input', { class: 'input', type: 'url', placeholder: 'https://...', value: uploadCfg.url });
+  const uploadGrid = el('div', { class: 'form-grid' }, [
     el('div', { class: 'field field-full', style: 'flex-direction:row;align-items:center;gap:8px' }, [
-      emailEnabledInput, el('label', { for: 'backupEmailEnabled' }, ['تفعيل الإرسال اليومي التلقائي']),
+      uploadEnabledInput, el('label', { for: 'backupUploadEnabled' }, ['تفعيل الرفع اليومي التلقائي']),
     ]),
-    el('div', { class: 'field' }, [el('label', {}, ['البريد المُرسَل إليه (المستلم)']), emailToInput]),
-    el('div', { class: 'field' }, [el('label', {}, ['البريد المرسِل (اسم المستخدم)']), emailUserInput]),
-    el('div', { class: 'field' }, [el('label', {}, ['كلمة المرور']), emailPassInput]),
-    el('div', { class: 'field' }, [el('label', {}, ['خادم SMTP']), emailHostInput]),
-    el('div', { class: 'field' }, [el('label', {}, ['المنفذ (Port)']), emailPortInput]),
-    el('div', { class: 'field', style: 'flex-direction:row;align-items:center;gap:8px' }, [
-      emailSecureInput, el('label', { for: 'backupEmailSecure' }, ['اتصال مشفّر SSL (منفذ 465 عادةً)']),
-    ]),
+    el('div', { class: 'field field-full' }, [el('label', {}, ['رابط الرفع (Webhook URL)']), uploadUrlInput]),
   ]);
-  area.appendChild(emailGrid);
-  if (emailCfg.lastSentDate) {
-    area.appendChild(el('div', { class: 'field-hint' }, ['آخر نسخة أُرسلت فعلياً بتاريخ: ' + emailCfg.lastSentDate]));
+  area.appendChild(uploadGrid);
+  if (uploadCfg.lastSentDate) {
+    area.appendChild(el('div', { class: 'field-hint' }, ['آخر نسخة رُفعت فعلياً بتاريخ: ' + uploadCfg.lastSentDate]));
   }
-  const emailActions = el('div', { class: 'toolbar', style: 'margin-top:8px' });
-  const readEmailCfg = () => ({
-    enabled: emailEnabledInput.checked,
-    to: emailToInput.value.trim(),
-    host: emailHostInput.value.trim(),
-    port: Number(emailPortInput.value) || 587,
-    secure: emailSecureInput.checked,
-    user: emailUserInput.value.trim(),
-    pass: emailPassInput.value,
-    lastSentDate: emailCfg.lastSentDate || '',
+  const uploadActions = el('div', { class: 'toolbar', style: 'margin-top:8px' });
+  const readUploadCfg = () => ({
+    enabled: uploadEnabledInput.checked,
+    url: uploadUrlInput.value.trim(),
+    lastSentDate: uploadCfg.lastSentDate || '',
   });
-  emailActions.appendChild(el('button', { class: 'btn btn-primary', onclick: async () => {
-    const cfg = readEmailCfg();
-    if (cfg.enabled && (!cfg.to || !cfg.host || !cfg.user || !cfg.pass)) {
-      toast('أكمل بيانات البريد كاملة قبل تفعيل الإرسال التلقائي', true);
+  uploadActions.appendChild(el('button', { class: 'btn btn-primary', onclick: async () => {
+    const cfg = readUploadCfg();
+    if (cfg.enabled && !cfg.url) {
+      toast('أدخل رابط الرفع قبل تفعيل الرفع التلقائي', true);
       return;
     }
-    STATE.settings = await window.api.settings.update({ backupEmail: cfg });
-    toast('تم حفظ إعدادات البريد');
-  }}, ['حفظ إعدادات البريد']));
-  emailActions.appendChild(el('button', { class: 'btn btn-ghost', onclick: async () => {
-    const cfg = readEmailCfg();
-    if (!cfg.to || !cfg.host || !cfg.user || !cfg.pass) {
-      toast('أكمل بيانات البريد كاملة أولاً (ويفضّل حفظها) قبل الإرسال التجريبي', true);
+    STATE.settings = await window.api.settings.update({ backupUpload: cfg });
+    toast('تم حفظ إعدادات الرفع');
+  }}, ['حفظ إعدادات الرفع']));
+  uploadActions.appendChild(el('button', { class: 'btn btn-ghost', onclick: async () => {
+    const cfg = readUploadCfg();
+    if (!cfg.url) {
+      toast('أدخل رابط الرفع أولاً', true);
       return;
     }
-    STATE.settings = await window.api.settings.update({ backupEmail: cfg });
-    toast('جارٍ إرسال نسخة تجريبية...');
-    const res = await window.api.backup.sendEmailNow();
+    STATE.settings = await window.api.settings.update({ backupUpload: cfg });
+    toast('جارٍ الرفع...');
+    const res = await window.api.backup.uploadNow();
     if (res.ok) {
-      toast('تم إرسال النسخة الاحتياطية بنجاح');
+      toast('تم رفع النسخة الاحتياطية بنجاح');
       navigate('settings');
     } else if (res.reason === 'missing_config') {
-      toast('أكمل بيانات البريد كاملة أولاً', true);
+      toast('أدخل رابط الرفع أولاً', true);
     } else {
-      toast('تعذّر الإرسال: ' + (res.message || 'تحقق من بيانات البريد والاتصال بالإنترنت'), true);
+      toast('تعذّر الرفع: ' + (res.message || 'تحقق من الرابط والاتصال بالإنترنت'), true);
     }
-  }}, ['✉ إرسال نسخة الآن (تجربة)']));
-  area.appendChild(emailActions);
+  }}, ['⬆ رفع الآن (تجربة)']));
+  area.appendChild(uploadActions);
 
   area.appendChild(el('div', { class: 'section-title' }, ['معلومات الترقيم']));
   area.appendChild(el('div', {}, [
@@ -1713,13 +1695,14 @@ async function printCustomerStatement(customerId) {
 
     let rows = '';
     events.forEach((e) => {
-      rows += '<tr><td>' + formatDate(e.date, true) + '</td><td>' + esc(e.label) + '</td><td>' + (e.debit ? '<span class="amt-us">' + formatMoney(e.debit, cur) + '</span>' : '—') + '</td><td>' + (e.credit ? '<span class="amt-them">' + formatMoney(e.credit, cur) + '</span>' : '—') + '</td></tr>';
+      const rowCls = e.label === 'حساب قديم' ? 'doc-row-opening' : (e.debit ? 'doc-row-debit' : 'doc-row-credit');
+      rows += '<tr class="' + rowCls + '"><td>' + formatDate(e.date, true) + '</td><td>' + esc(e.label) + '</td><td>' + (e.debit ? '<span class="amt-us">' + formatMoney(e.debit, cur) + '</span>' : '—') + '</td><td>' + (e.credit ? '<span class="amt-them">' + formatMoney(e.credit, cur) + '</span>' : '—') + '</td></tr>';
     });
     const theyOweUs = sSales.reduce((s, i) => s + (i.total - i.paidAmount), 0) + (openingOriginal > 0 ? openingOriginal : 0);
 
     return (
       '<div class="doc-section-title">كشف حساب بـ' + currencyLabel(cur) + '</div>' +
-      '<table class="doc-table"><thead><tr><th>التاريخ</th><th>الحركة</th><th>مدين</th><th>دائن</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+      '<table class="doc-table"><thead><tr><th>التاريخ</th><th>الحركة</th><th>قوائم البيع</th><th>قوائم تسديد</th></tr></thead><tbody>' + rows + '</tbody></table>' +
       '<div class="doc-totals">' +
         '<div class="grand"><span>إجمالي الباقي بـ' + currencyLabel(cur) + '</span><span class="amt-us">' + formatMoney(theyOweUs, cur) + '</span></div>' +
       '</div>'

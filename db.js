@@ -36,6 +36,12 @@ function defaultData() {
         pass: '',
         lastSentDate: '', // YYYY-MM-DD — آخر يوم أُرسلت فيه النسخة فعلياً، لمنع الإرسال أكثر من مرة في نفس اليوم
       },
+      // رفع نسخة احتياطية يومياً تلقائياً عبر رابط (Webhook) يحدده المستخدم (اختياري)
+      backupUpload: {
+        enabled: false,
+        url: '',
+        lastSentDate: '', // YYYY-MM-DD — آخر يوم رُفعت فيه النسخة فعلياً، لمنع الرفع أكثر من مرة في نفس اليوم
+      },
     },
     customers: [],
     saleInvoices: [],
