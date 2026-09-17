@@ -17,6 +17,9 @@ interface SaleInvoiceDao {
     @Query("SELECT * FROM sale_invoices")
     suspend fun getAllOnce(): List<SaleInvoice>
 
+    @Query("SELECT * FROM sale_invoices WHERE id = :id")
+    suspend fun getById(id: String): SaleInvoice?
+
     @Query("SELECT COUNT(*) FROM sale_invoices")
     suspend fun count(): Int
 

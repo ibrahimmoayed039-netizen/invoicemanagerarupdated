@@ -12,6 +12,7 @@ import androidx.lifecycle.lifecycleScope
 import com.example.invoicemanager.R
 import com.example.invoicemanager.data.AppDatabase
 import com.example.invoicemanager.data.Customer
+import com.example.invoicemanager.data.PurchaseInvoice
 import com.example.invoicemanager.databinding.ActivityCustomerStatementBinding
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
@@ -53,12 +54,23 @@ class CustomerStatementActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val customer = db.customerDao().getById(customerId) ?: return@launch
             val invoices = db.saleInvoiceDao().getForCustomerOnce(customerId)
-            val payments = db.paymentDao().getForCustomerOnce(customerId)
+            // نستثني تسديدات فواتير الشراء من دفتر "المستحق لنا" لأنها حركة مستقلة تخص
+            // دفتر "المستحق علينا" (المشتريات)، وليست جزءاً من حساب العميل كعميل يشتري منا.
+            val payments = db.paymentDao().getForCustomerOnce(customerId).filter { it.kind != "purchase_payment" }
 
             binding.textCustomerName.text = customer.name
 
             renderLedger(binding.containerIqd, buildLedger(customer, invoices, payments, "IQD"), "IQD")
             renderLedger(binding.containerUsd, buildLedger(customer, invoices, payments, "USD"), "USD")
+
+            // دفتر المشتريات (ما ندين نحن به لهذا الطرف كمورّد) — يظهر فقط إن وُجدت أي فواتير شراء له
+            val purchaseInvoices = db.purchaseInvoiceDao().getForCustomerOnce(customerId)
+            val purchasePayments = db.paymentDao().getForCustomerOnce(customerId).filter { it.kind == "purchase_payment" }
+            if (purchaseInvoices.isNotEmpty()) {
+                binding.purchaseSection.visibility = android.view.View.VISIBLE
+                renderLedger(binding.containerPurchaseIqd, buildPurchaseLedger(purchaseInvoices, purchasePayments, "IQD"), "IQD")
+                renderLedger(binding.containerPurchaseUsd, buildPurchaseLedger(purchaseInvoices, purchasePayments, "USD"), "USD")
+            }
         }
     }
 
@@ -79,6 +91,23 @@ class CustomerStatementActivity : AppCompatActivity() {
         payments.filter { it.currency == currency }.forEach { p ->
             val label = if (p.kind == "opening_payment") "تسديد رصيد قديم" else "تسديد"
             events.add(LedgerEvent(p.date, p.date, label, "payment", -p.amount))
+        }
+        return events.sortedBy { it.sortDate }
+    }
+
+    // دفتر المشتريات: فاتورة الشراء تزيد ما ندين به (مدين)، وتسديدنا للمورّد يقلّله (دائن) — نفس منطق
+    // دفتر المبيعات لكن بدون "حساب قديم" لأن الرصيد القديم بهذه النسخة يخص علاقة العميل بنا فقط.
+    private fun buildPurchaseLedger(
+        invoices: List<PurchaseInvoice>,
+        payments: List<com.example.invoicemanager.data.Payment>,
+        currency: String,
+    ): List<LedgerEvent> {
+        val events = mutableListOf<LedgerEvent>()
+        invoices.filter { it.currency == currency }.forEach { inv ->
+            events.add(LedgerEvent(inv.date, inv.date, "فاتورة شراء ${inv.invoiceNumber}", "invoice", inv.total))
+        }
+        payments.filter { it.currency == currency }.forEach { p ->
+            events.add(LedgerEvent(p.date, p.date, "تسديد للمورّد", "payment", -p.amount))
         }
         return events.sortedBy { it.sortDate }
     }

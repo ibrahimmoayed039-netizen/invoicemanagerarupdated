@@ -34,6 +34,7 @@ class CustomersActivity : AppCompatActivity() {
             onClick = { customer -> startActivity(CustomerStatementActivity.intentFor(this, customer.id)) },
             onLongClick = { customer -> showSettleOpeningDialog(customer, customerDao, paymentDao); true },
         )
+        binding.recyclerCustomers.layoutManager = androidx.recyclerview.widget.LinearLayoutManager(this)
         binding.recyclerCustomers.adapter = adapter
         customerDao.observeAll().observe(this) { adapter.submitList(it) }
 

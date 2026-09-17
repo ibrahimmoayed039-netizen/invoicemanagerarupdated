@@ -22,6 +22,12 @@
             android:name=".ui.SaleInvoicesActivity"
             android:exported="false" />
         <activity
+            android:name=".ui.PurchaseInvoicesActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.PaymentsActivity"
+            android:exported="false" />
+        <activity
             android:name=".ui.CustomerStatementActivity"
             android:exported="false" />
         <activity
@@ -29,6 +35,9 @@
             android:exported="false" />
         <activity
             android:name=".ui.PlaceholderActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.SettingsActivity"
             android:exported="false" />
     </application>
 

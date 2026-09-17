@@ -47,5 +47,53 @@
             android:layout_height="wrap_content"
             android:orientation="vertical" />
 
+        <!-- قسم المشتريات — يظهر فقط إذا كان هذا العميل تم التعامل معه كمورّد أيضاً -->
+        <LinearLayout
+            android:id="@+id/purchaseSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="ما ندين به له (فواتير شراء)"
+                android:textStyle="bold"
+                android:textSize="18sp"
+                android:layout_marginTop="24dp" />
+
+            <TextView
+                android:id="@+id/labelPurchaseIqd"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="دفتر الدينار"
+                android:textStyle="bold"
+                android:textSize="16sp"
+                android:layout_marginTop="8dp" />
+
+            <LinearLayout
+                android:id="@+id/containerPurchaseIqd"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <TextView
+                android:id="@+id/labelPurchaseUsd"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="دفتر الدولار"
+                android:textStyle="bold"
+                android:textSize="16sp"
+                android:layout_marginTop="20dp" />
+
+            <LinearLayout
+                android:id="@+id/containerPurchaseUsd"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+        </LinearLayout>
+
     </LinearLayout>
 </ScrollView>

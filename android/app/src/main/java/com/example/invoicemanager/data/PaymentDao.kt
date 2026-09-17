@@ -5,6 +5,9 @@ import androidx.room.*
 
 @Dao
 interface PaymentDao {
+    @Query("SELECT * FROM payments ORDER BY date DESC")
+    fun observeAll(): LiveData<List<Payment>>
+
     @Query("SELECT * FROM payments WHERE customerId = :customerId ORDER BY date DESC")
     fun observeForCustomer(customerId: String): LiveData<List<Payment>>
 

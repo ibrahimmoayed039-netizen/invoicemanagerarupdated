@@ -29,18 +29,10 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, DuesActivity::class.java))
         }
         binding.btnSettlements.setOnClickListener {
-            startActivity(
-                PlaceholderActivity.intentFor(
-                    this,
-                    "التسديد",
-                    "التسديد يتم مباشرة من داخل الشاشات:\n\n" +
-                        "• لتسديد فاتورة: افتح \"الفواتير\" واضغط زر \"تسديد\" على أي فاتورة غير مسددة.\n\n" +
-                        "• لتسديد رصيد قديم: افتح \"العملاء\" واضغط ضغطة مطوّلة على اسم العميل.",
-                )
-            )
+            startActivity(Intent(this, PaymentsActivity::class.java))
         }
         binding.btnSettings.setOnClickListener {
-            startActivity(PlaceholderActivity.intentFor(this, "الإعدادات"))
+            startActivity(Intent(this, SettingsActivity::class.java))
         }
     }
 
@@ -54,9 +46,12 @@ class MainActivity : AppCompatActivity() {
         val nf = NumberFormat.getNumberInstance(Locale.US)
         lifecycleScope.launch {
             val s = DuesCalculator.computeDashboard(db)
-            binding.textSummaryCounts.text = "عدد العملاء: ${s.customersCount}   —   عدد الفواتير: ${s.saleInvoicesCount}"
-            binding.textSummarySales.text = "إجمالي المبيعات: ${nf.format(s.totalSalesIqd)} د.ع  /  ${nf.format(s.totalSalesUsd)} $"
-            binding.textSummaryDues.text = "إجمالي المستحقات: ${nf.format(s.totalDuesIqd)} د.ع  /  ${nf.format(s.totalDuesUsd)} $"
+            binding.textSummaryCounts.text =
+                "عدد العملاء: ${s.customersCount}   —   فواتير بيع: ${s.saleInvoicesCount}   —   فواتير شراء: ${s.purchaseInvoicesCount}"
+            binding.textSummarySales.text =
+                "المبيعات: ${nf.format(s.totalSalesIqd)} د.ع / ${nf.format(s.totalSalesUsd)} $   —   المشتريات: ${nf.format(s.totalPurchasesIqd)} د.ع / ${nf.format(s.totalPurchasesUsd)} $"
+            binding.textSummaryDues.text =
+                "لنا: ${nf.format(s.totalDuesIqd)} د.ع / ${nf.format(s.totalDuesUsd)} $   —   علينا: ${nf.format(s.totalWeOweIqd)} د.ع / ${nf.format(s.totalWeOweUsd)} $"
         }
     }
 }
