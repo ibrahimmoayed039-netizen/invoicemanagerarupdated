@@ -1,3 +1,11 @@
 <resources>
     <color name="ic_launcher_background">#2F6F5E</color>
+
+    <!-- نفس ألوان تلوين الحالة المستخدمة بنسخة سطح المكتب -->
+    <color name="tint_paid">#E3F2E9</color>
+    <color name="tint_partial">#FBF3D9</color>
+    <color name="tint_unpaid">#FBEEE6</color>
+    <color name="status_paid">#2F6F5E</color>
+    <color name="status_partial">#9A7B12</color>
+    <color name="status_unpaid">#B5502E</color>
 </resources>

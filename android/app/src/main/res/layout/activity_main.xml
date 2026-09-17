@@ -1,10 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
+    android:layout_height="match_parent">
+
+<LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:padding="20dp"
-    android:gravity="center">
+    android:padding="20dp">
 
     <TextView
         android:id="@+id/title"
@@ -13,7 +16,41 @@
         android:text="@string/app_name"
         android:textSize="24sp"
         android:textStyle="bold"
-        android:layout_marginBottom="24dp" />
+        android:layout_gravity="center"
+        android:layout_marginBottom="16dp" />
+
+    <!-- لوحة ملخص سريعة: عدد العملاء والفواتير وإجمالي المبيعات والمستحقات -->
+    <LinearLayout
+        android:id="@+id/summaryCard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="#F3F1EA"
+        android:padding="16dp"
+        android:layout_marginBottom="20dp">
+
+        <TextView
+            android:id="@+id/textSummaryCounts"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/textSummarySales"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="13sp"
+            android:layout_marginTop="6dp" />
+
+        <TextView
+            android:id="@+id/textSummaryDues"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:layout_marginTop="6dp" />
+
+    </LinearLayout>
 
     <Button android:id="@+id/btnCustomers" style="@style/Widget.Material3.Button"
         android:layout_width="match_parent" android:layout_height="wrap_content"
@@ -23,7 +60,11 @@
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:layout_marginBottom="12dp" android:text="@string/nav_invoices" />
 
-    <Button android:id="@+id/btnSettlements" style="@style/Widget.Material3.Button"
+    <Button android:id="@+id/btnDues" style="@style/Widget.Material3.Button"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginBottom="12dp" android:text="@string/nav_dues" />
+
+    <Button android:id="@+id/btnSettlements" style="@style/Widget.Material3.Button.OutlinedButton"
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:layout_marginBottom="12dp" android:text="@string/nav_settlements" />
 
@@ -32,3 +73,4 @@
         android:text="@string/nav_settings" />
 
 </LinearLayout>
+</ScrollView>

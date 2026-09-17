@@ -8,7 +8,10 @@ import androidx.recyclerview.widget.RecyclerView
 import com.example.invoicemanager.data.Customer
 import com.example.invoicemanager.databinding.ItemCustomerBinding
 
-class CustomerAdapter : ListAdapter<Customer, CustomerAdapter.VH>(DIFF) {
+class CustomerAdapter(
+    private val onClick: (Customer) -> Unit = {},
+    private val onLongClick: (Customer) -> Boolean = { false },
+) : ListAdapter<Customer, CustomerAdapter.VH>(DIFF) {
 
     class VH(val binding: ItemCustomerBinding) : RecyclerView.ViewHolder(binding.root)
 
@@ -21,6 +24,8 @@ class CustomerAdapter : ListAdapter<Customer, CustomerAdapter.VH>(DIFF) {
         val c = getItem(position)
         holder.binding.textName.text = c.name
         holder.binding.textPhone.text = c.phone
+        holder.itemView.setOnClickListener { onClick(c) }
+        holder.itemView.setOnLongClickListener { onLongClick(c) }
     }
 
     companion object {

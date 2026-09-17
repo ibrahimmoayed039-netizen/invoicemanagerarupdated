@@ -8,6 +8,9 @@ interface CustomerDao {
     @Query("SELECT * FROM customers ORDER BY name COLLATE NOCASE ASC")
     fun observeAll(): LiveData<List<Customer>>
 
+    @Query("SELECT * FROM customers ORDER BY name COLLATE NOCASE ASC")
+    suspend fun getAllOnce(): List<Customer>
+
     @Query("SELECT * FROM customers WHERE id = :id")
     suspend fun getById(id: String): Customer?
 
